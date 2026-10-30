@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+config.json
+config.tmp
+*.lock
+*.log
+records/
+reference/
+validation/*
+!validation/README.md
+assets/ocr-v6/*.onnx
+assets/ocr-v6/*.part-*
+dist/
+.env
+.env.*
+!.env.example

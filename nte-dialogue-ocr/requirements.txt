@@ -1,0 +1,10 @@
+rapidocr-onnxruntime==1.4.4
+rapidocr==3.10.0
+onnxruntime==1.30.0
+opencv-python==4.14.0.94
+windows-capture==1.5.0
+PySide6==6.11.2
+pywin32==312
+numpy==2.5.3
+mss==10.2.0
+psutil==7.2.2

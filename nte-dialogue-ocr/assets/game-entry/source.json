@@ -1,0 +1,58 @@
+{
+  "repository": "https://github.com/BnanZ0/ok-nte",
+  "revision": "893525d5c62eb86fb596956b85d3f136e0209918",
+  "license": "GPL-3.0",
+  "purpose": "Small screenshot templates for identifying title and in-game HUD; no upstream automation code is executed.",
+  "assets": [
+    {
+      "file": "auto_play_2560x1440_2163_68.png",
+      "source_url": "https://raw.githubusercontent.com/BnanZ0/ok-nte/893525d5c62eb86fb596956b85d3f136e0209918/assets/templates/auto_play_2560x1440_2163_68.png",
+      "bytes": 1168
+    },
+    {
+      "file": "char_1_text_2560x1440_2501_323.png",
+      "source_url": "https://raw.githubusercontent.com/BnanZ0/ok-nte/893525d5c62eb86fb596956b85d3f136e0209918/assets/templates/char_1_text_2560x1440_2501_323.png",
+      "bytes": 548
+    },
+    {
+      "file": "char_2_text_2560x1440_2497_499.png",
+      "source_url": "https://raw.githubusercontent.com/BnanZ0/ok-nte/893525d5c62eb86fb596956b85d3f136e0209918/assets/templates/char_2_text_2560x1440_2497_499.png",
+      "bytes": 848
+    },
+    {
+      "file": "dialog_click_2560x1440_1272_1358.png",
+      "source_url": "https://raw.githubusercontent.com/BnanZ0/ok-nte/893525d5c62eb86fb596956b85d3f136e0209918/assets/templates/dialog_click_2560x1440_1272_1358.png",
+      "bytes": 694
+    },
+    {
+      "file": "dialog_history_2560x1440_2258_69.png",
+      "source_url": "https://raw.githubusercontent.com/BnanZ0/ok-nte/893525d5c62eb86fb596956b85d3f136e0209918/assets/templates/dialog_history_2560x1440_2258_69.png",
+      "bytes": 1784
+    },
+    {
+      "file": "health_bar_slash_2560x1440_1273_1335.png",
+      "source_url": "https://raw.githubusercontent.com/BnanZ0/ok-nte/893525d5c62eb86fb596956b85d3f136e0209918/assets/templates/health_bar_slash_2560x1440_1273_1335.png",
+      "bytes": 856
+    },
+    {
+      "file": "is_current_char_2560x1440_2353_344.png",
+      "source_url": "https://raw.githubusercontent.com/BnanZ0/ok-nte/893525d5c62eb86fb596956b85d3f136e0209918/assets/templates/is_current_char_2560x1440_2353_344.png",
+      "bytes": 4731
+    },
+    {
+      "file": "login_setting_2560x1440_2467_36.png",
+      "source_url": "https://raw.githubusercontent.com/BnanZ0/ok-nte/893525d5c62eb86fb596956b85d3f136e0209918/assets/templates/login_setting_2560x1440_2467_36.png",
+      "bytes": 2321
+    },
+    {
+      "file": "mini_map_arrow_2560x1440_194_160.png",
+      "source_url": "https://raw.githubusercontent.com/BnanZ0/ok-nte/893525d5c62eb86fb596956b85d3f136e0209918/assets/templates/mini_map_arrow_2560x1440_194_160.png",
+      "bytes": 2007
+    },
+    {
+      "file": "skip_dialog_2560x1440_2454_71.png",
+      "source_url": "https://raw.githubusercontent.com/BnanZ0/ok-nte/893525d5c62eb86fb596956b85d3f136e0209918/assets/templates/skip_dialog_2560x1440_2454_71.png",
+      "bytes": 1399
+    }
+  ]
+}

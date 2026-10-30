@@ -1,0 +1,38 @@
+{
+  "game_title": "异环",
+  "launcher_path": "",
+  "capture_backend": "wgc",
+  "ocr_mode": "rapid_dual",
+  "wgc_background": true,
+  "launch_timeout_seconds": 180,
+  "entry_timeout_seconds": 120,
+  "startup_acceptance": "pending",
+  "calibrated": false,
+  "reference_size": [
+    1920,
+    1080
+  ],
+  "body_roi": [
+    0.11,
+    0.805,
+    0.89,
+    0.915
+  ],
+  "speaker_roi": [
+    0.39,
+    0.748,
+    0.61,
+    0.791
+  ],
+  "min_confidence": 0.8,
+  "blank_reset_seconds": 0.8,
+  "poll_interval_seconds": 0.3,
+  "save_dialogue_images": true,
+  "capture_fps": 5,
+  "preview_fps": 2,
+  "verification_threshold": 0.9,
+  "verify_scale": 2.0,
+  "calibration_status": "needs_calibration",
+  "centered_body": true,
+  "render_stable_seconds": 0.45
+}
