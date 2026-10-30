@@ -1,4 +1,5 @@
 from wuwa_dubber.segmentation import split_for_speech
+from wuwa_dubber.segmentation import split_for_latency
 
 
 def test_natural_sentences_and_short_interjection_merge() -> None:
@@ -80,3 +81,32 @@ def test_empty_and_invalid_limits() -> None:
             pass
         else:
             raise AssertionError("Invalid limit accepted")
+
+
+def test_latency_split_is_bounded_and_lossless_for_five_text_shapes() -> None:
+    samples = [
+        "今天的天气很不错，我们一起出去走走吧。接着再去看看街角新开的那家书店。",
+        "没有标点的台词也需要保持所有文字原本的顺序" * 8,
+        "这是一段非常长的角色独白，" * 12 + "最后我们一起出发。",
+        "好！走吧。现在出发！别忘了拿上钥匙。",
+        "Dr. Smith measured 3.14 units, then checked the results. Everything was correct.",
+    ]
+    for text in samples:
+        parts = split_for_latency(text)
+        assert "".join(parts) == text
+        assert 0 < len(parts[0]) <= 10
+        assert all(0 < len(part) <= 36 for part in parts[1:])
+
+
+def test_latency_split_prefers_pause_and_can_be_disabled() -> None:
+    text = "今天的天气很不错，我们一起出去走走吧。"
+    assert split_for_latency(text)[0] == "今天的天气很不错，"
+    assert split_for_latency(text, first_max_chars=0) == split_for_speech(text, max_chars=36)
+    assert split_for_latency("今天的天气很不错。") == ["今天的天气很不错。"]
+
+
+def test_latency_split_keeps_quotation_content_order_and_numbers() -> None:
+    text = "他说：\"It's 3.14, e.g. a sample.\" 然后我们（先商量，再出发）离开。"
+    parts = split_for_latency(text, first_max_chars=10, max_chars=18)
+    assert "".join(parts) == text
+    assert any("3.14" in part for part in parts)

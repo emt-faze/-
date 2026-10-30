@@ -7,8 +7,10 @@ No torch, NumPy, soundfile, model download, or GPU is required.
 from __future__ import annotations
 
 import http.client
+import base64
 import io
 import json
+import os
 import tempfile
 import threading
 import time
@@ -106,6 +108,10 @@ class ProtocolTests(unittest.TestCase):
 
     def tearDown(self):
         self.model.release.set()
+        worker = getattr(self.engine, "warmup_thread", None)
+        if worker is not None:
+            self.engine.warmup_stop.set()
+            worker.join(4)
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(2)
@@ -207,6 +213,95 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(self.engine.last_metrics["prompt_cache_hit"])
         self.assertFalse(self.engine.lock.locked())
         self.assertIsNone(self.engine.active_id)
+
+    def test_diagnostic_json_preserves_wav_and_accounts_for_stage_timings(self):
+        original = self.model.generate_voice_clone
+        def delayed(**kwargs):
+            time.sleep(0.04)
+            return original(**kwargs)
+        self.model.generate_voice_clone = delayed
+        status, content_type, body = self.request("/v1/synthesize", payload=self.payload(response_format="json"))
+        self.assertEqual(status, 200)
+        self.assertIn("application/json", content_type)
+        result = json.loads(body)
+        self.assertTrue(base64.b64decode(result["audio_wav_base64"]).startswith(b"RIFF"))
+        timing = result["timing_ms"]
+        names = ("model_load", "ref_encode", "text_prepare", "infer", "wav_write")
+        self.assertTrue(all(timing[name] >= 0 for name in names))
+        self.assertEqual(timing["model_load"], 0)
+        self.assertGreaterEqual(timing["infer"], 35)
+        self.assertLess(abs(timing["total"] - sum(timing[name] for name in names)), timing["total"] * 0.1)
+
+    def test_invalid_response_format_does_not_start_generation(self):
+        status, _, _ = self.request("/v1/synthesize", payload=self.payload(response_format="invalid"))
+        self.assertEqual(status, 400)
+        self.assertEqual(self.model.generation_calls, 0)
+
+    def test_background_warmup_keeps_health_available_and_reuses_reference(self):
+        self.model.block = True
+        self.engine.start_warmup(self.payload())
+        self.assertTrue(self.model.started.wait(2))
+        status, _, body = self.request("/v1/health", method="GET")
+        self.assertEqual(status, 200)
+        self.assertFalse(json.loads(body)["warm"])
+        self.assertTrue(json.loads(body)["warming"])
+        self.model.release.set()
+        self.engine.warmup_thread.join(3)
+        self.assertTrue(self.engine.warm)
+        self.assertFalse(self.engine.warmup_running)
+        self.assertEqual(self.model.prompt_calls, 1)
+        self.assertEqual(self.model.generation_calls, 2)
+
+    def test_user_request_preempts_warmup_and_is_not_rejected_as_busy(self):
+        self.model.block = True
+        self.engine.start_warmup(self.payload())
+        self.assertTrue(self.model.started.wait(2))
+        results = []
+        user = threading.Thread(target=lambda: results.append(self.request("/v1/synthesize", payload=self.payload(request_id="user"))))
+        user.start()
+        self.assertTrue(self.engine.warmup_stop.wait(2))
+        self.model.release.set()
+        user.join(3)
+        self.engine.warmup_thread.join(3)
+        self.assertFalse(user.is_alive())
+        self.assertEqual(results[0][0], 200)
+        self.assertTrue(results[0][2].startswith(b"RIFF"))
+        self.assertTrue(self.engine.warm)
+
+    def test_warmup_failure_does_not_disable_later_requests(self):
+        with patch.object(self.model, "generate_voice_clone", side_effect=RuntimeError("warmup failure")):
+            self.engine.start_warmup(self.payload())
+            self.engine.warmup_thread.join(3)
+        self.assertEqual(self.engine.warmup_report["status"], "failed")
+        self.assertFalse(self.engine.warmup_running)
+        self.assertEqual(self.request("/v1/synthesize", payload=self.payload(request_id="after-failure"))[0], 200)
+
+    def test_reference_content_change_invalidates_prompt_even_when_size_and_time_match(self):
+        self.engine.synthesize(self.payload())
+        stat = self.reference.stat()
+        data = bytearray(self.reference.read_bytes())
+        data[-1] = 1
+        self.reference.write_bytes(data)
+        os.utime(self.reference, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        self.engine.synthesize(self.payload(request_id="changed"))
+        self.assertEqual(self.model.prompt_calls, 2)
+        self.assertFalse(self.engine.last_metrics["prompt_cache_hit"])
+
+    def test_reference_transcript_change_invalidates_prompt(self):
+        self.engine.synthesize(self.payload())
+        self.engine.synthesize(self.payload(request_id="changed", prompt_text="修改后的准确参考文字。"))
+        self.assertEqual(self.model.prompt_calls, 2)
+
+    def test_prompt_cache_evicts_least_recently_used_entry(self):
+        self.engine.prompt_cache_limit = 2
+        for text in ("甲", "乙", "甲", "丙"):
+            self.engine.synthesize(self.payload(prompt_text=text))
+        self.assertEqual(len(self.engine.prompts), 2)
+        self.assertEqual(self.model.prompt_calls, 3)
+        self.engine.synthesize(self.payload(prompt_text="甲"))
+        self.assertEqual(self.model.prompt_calls, 3)
+        self.engine.synthesize(self.payload(prompt_text="乙"))
+        self.assertEqual(self.model.prompt_calls, 4)
 
     def test_cancel_arriving_before_synthesis_is_remembered(self):
         status, _, body = self.request("/v1/cancel", payload={"request_id": "cancel-before-start"})

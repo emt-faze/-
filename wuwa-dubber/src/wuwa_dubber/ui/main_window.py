@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QStyle,
     QTableWidget,
@@ -288,6 +289,14 @@ class MainWindow(QMainWindow):
         self.output_volume.setSingleStep(0.05)
         self.pending_limit = QSpinBox()
         self.pending_limit.setRange(0, 10)
+        self.first_segment_limit = QSpinBox()
+        self.first_segment_limit.setRange(0, 300)
+        self.first_segment_limit.setSpecialValueText("关闭首段短切")
+        self.segment_limit = QSpinBox()
+        self.segment_limit.setRange(4, 300)
+        self.prefetch_window = QSpinBox()
+        self.prefetch_window.setRange(1, 3)
+        self.prefetch_window.setToolTip("仍然每次只生成一段；增加的是提前准备的段数。")
         self.backend_combo = QComboBox()
         self.backend_combo.addItem("系统中文朗读（离线，无需模型）", "windows-sapi")
         self.backend_combo.addItem("GPT-SoVITS（角色音色，需要模型和参考音频）", "gpt-sovits")
@@ -305,6 +314,9 @@ class MainWindow(QMainWindow):
         audio_form.addRow("输出设备", device_row)
         audio_form.addRow("音量", self.output_volume)
         audio_form.addRow("待播队列上限", self.pending_limit)
+        audio_form.addRow("角色配音首段字数", self.first_segment_limit)
+        audio_form.addRow("后续分段字数", self.segment_limit)
+        audio_form.addRow("角色预生成段数", self.prefetch_window)
         audio_form.addRow("朗读方式", self.backend_combo)
         audio_form.addRow("联调选项", self.fake_tts)
         audio_form.addRow("TTS 工作进程", self.tts_endpoint)
@@ -320,7 +332,11 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout(page)
         layout.addWidget(voice_group, 1)
-        layout.addWidget(audio_group)
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setWidget(audio_group)
+        settings_scroll.setMinimumHeight(260)
+        layout.addWidget(settings_scroll, 2)
         return page
 
     def _build_diagnostics_tab(self) -> QWidget:
@@ -387,6 +403,9 @@ class MainWindow(QMainWindow):
         self._update_rect_labels()
         self.output_volume.setValue(config.output_volume)
         self.pending_limit.setValue(config.pending_queue_limit)
+        self.first_segment_limit.setValue(config.first_segment_max_chars)
+        self.segment_limit.setValue(config.segment_max_chars)
+        self.prefetch_window.setValue(config.prefetch_window)
         self.fake_tts.setChecked(config.use_fake_tts)
         self.backend_combo.setCurrentIndex(max(0, self.backend_combo.findData(config.tts_backend)))
         self.tts_endpoint.setText(config.tts_endpoint)
@@ -410,6 +429,9 @@ class MainWindow(QMainWindow):
         config.output_device = self.output_device.currentData()
         config.output_volume = self.output_volume.value()
         config.pending_queue_limit = self.pending_limit.value()
+        config.first_segment_max_chars = self.first_segment_limit.value()
+        config.segment_max_chars = self.segment_limit.value()
+        config.prefetch_window = self.prefetch_window.value()
         config.use_fake_tts = self.fake_tts.isChecked()
         config.tts_backend = str(self.backend_combo.currentData())
         config.tts_endpoint = self.tts_endpoint.text().strip()
@@ -457,6 +479,8 @@ class MainWindow(QMainWindow):
             if selected is None:
                 self.preview_status.setText("请先导入并选中角色参考声线，或切换到系统中文朗读。")
                 return
+            self.config.warmup_speaker = selected.speaker
+            save_config(self.config, self.paths)
             errors = selected.validate(self.paths.profiles)
             if not selected.enabled:
                 errors.append("该声线已停用")

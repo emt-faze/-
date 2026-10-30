@@ -7,7 +7,7 @@ import unicodedata
 _PAIRS = {"（": "）", "(": ")", "[": "]", "【": "】", "{": "}",
           "《": "》", "〈": "〉", "“": "”", "‘": "’", "「": "」", "『": "』"}
 _TERMINAL = set("。！？!?")
-_SOFT = set("，,；;：:")
+_SOFT = set("，,；;：:、")
 _ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "no", "fig", "approx"}
 _HARD_LIMIT = 300
 
@@ -148,5 +148,31 @@ def split_for_speech(text: str, *, max_chars: int = 80) -> list[str]:
         if result and (previous_short or current_short) and len(result[-1]) + len(piece) <= max_chars:
             result[-1] += piece
         else:
+            result.append(piece)
+    return result
+
+
+def split_for_latency(text: str, *, first_max_chars: int = 10, max_chars: int = 36) -> list[str]:
+    """缩短角色配音首段；设为 0 时保留原自然分段策略。"""
+    if not isinstance(first_max_chars, int) or isinstance(first_max_chars, bool) or first_max_chars < 0:
+        raise ValueError("首段字数必须是非负整数")
+    pieces = split_for_speech(text, max_chars=max_chars)
+    if not pieces or first_max_chars == 0:
+        return pieces
+    first_limit = min(first_max_chars, max_chars, _HARD_LIMIT)
+    first = pieces[0]
+    if len(first) > first_limit:
+        hard, soft = _boundaries(first)
+        # 优先已有停顿；没有停顿时保留字符顺序，尽量避开英文词和数字内部。
+        boundaries = [p for p in (*hard, *soft) if p <= first_limit]
+        cut = max(boundaries) if boundaries else _safe_cut(first, first_limit)
+        pieces = [first[:cut], *split_for_speech(first[cut:] + "".join(pieces[1:]), max_chars=max_chars)]
+    result = [pieces[0]]
+    for piece in pieces[1:]:
+        while len(piece) > max_chars:
+            cut = _safe_cut(piece, max_chars)
+            result.append(piece[:cut])
+            piece = piece[cut:]
+        if piece:
             result.append(piece)
     return result

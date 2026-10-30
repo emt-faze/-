@@ -29,7 +29,9 @@ class SpeechPreview(QThread):
             if self.cancel_event.is_set() or self.isInterruptionRequested():
                 return
             self.client = create_tts_client(self.config)
-            self.client.health()
+            health = self.client.health()
+            if health.get("warming"):
+                self._emit_progress("模型预热中…正在优先处理你的试听请求，可随时停止。")
             if self.cancel_event.is_set() or self.isInterruptionRequested():
                 return
             self.session = SpeechSession(self.config, self.output.parent, self.client, self.player)

@@ -1,4 +1,4 @@
-"""Shared sentence playback with one sentence of bounded synthesis lookahead."""
+"""Shared sentence playback with configurable bounded synthesis lookahead."""
 from __future__ import annotations
 
 import queue
@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .config import AppConfig, CLONING_BACKENDS
 from .models import Utterance, VoiceProfile
-from .segmentation import split_for_speech
+from .segmentation import split_for_speech, split_for_latency
 from .speech_cache import CachedSpeech, SpeechCache, SpeechCancelled, valid_wav
 from .text_processing import normalize_text
 
@@ -36,6 +36,31 @@ class SpeechReport:
     first_audio_seconds: float
     elapsed_seconds: float
     paths: tuple[Path, ...]
+
+
+class _PrefetchBudget:
+    """限制正在播放、排队和生成中的总段数，内存紧张时可降低上限。"""
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.active = 0
+        self.condition = threading.Condition()
+
+    def acquire(self, timeout: float) -> bool:
+        with self.condition:
+            if not self.condition.wait_for(lambda: self.active < self.limit, timeout=timeout):
+                return False
+            self.active += 1
+            return True
+
+    def release(self) -> None:
+        with self.condition:
+            self.active -= 1
+            self.condition.notify_all()
+
+    def reduce(self) -> None:
+        with self.condition:
+            self.limit = min(self.limit, 2)
+            self.condition.notify_all()
 
 
 class SpeechSession:
@@ -111,10 +136,11 @@ class SpeechSession:
         if self._is_cancelled():
             raise SpeechCancelled("配音已取消")
         started = time.monotonic()
-        ready: queue.Queue = queue.Queue(maxsize=2)
+        prefetch = self.config.prefetch_window if self.config.tts_backend in CLONING_BACKENDS else 1
+        ready: queue.Queue = queue.Queue(maxsize=prefetch + 1)
         # Includes the currently playing segment. Acquire before synthesis so
         # a full ready queue cannot hide another unbounded in-flight request.
-        credits = threading.BoundedSemaphore(2)
+        credits = _PrefetchBudget(prefetch + 1)
         done = object()
         played: list[SegmentEvent] = []
         first_audio_seconds = 0.0
@@ -137,8 +163,20 @@ class SpeechSession:
                 if self._is_cancelled():
                     raise SpeechCancelled("配音已取消")
                 whole = cache.lookup(normalized, profile)
-                max_chars = 36 if self.config.tts_backend in CLONING_BACKENDS else 80
-                parts = [normalized.text] if whole and not force else split_for_speech(normalized.text, max_chars=max_chars)
+                cloning = self.config.tts_backend in CLONING_BACKENDS
+                max_chars = self.config.segment_max_chars if cloning else 80
+                if whole and not force:
+                    parts = [normalized.text]
+                elif cloning:
+                    legacy = split_for_speech(normalized.text, max_chars=36)
+                    # 全部已有旧版分段缓存时继续复用，避免更新后反而重新生成。
+                    if not force and all(cache.lookup(replace(normalized, text=p), profile) for p in legacy):
+                        parts = legacy
+                    else:
+                        parts = split_for_latency(normalized.text, first_max_chars=self.config.first_segment_max_chars,
+                                                  max_chars=max_chars)
+                else:
+                    parts = split_for_speech(normalized.text, max_chars=max_chars)
                 generated_paths = []
                 for index, text in enumerate(parts, 1):
                     while not credits.acquire(timeout=0.05):
@@ -149,9 +187,26 @@ class SpeechSession:
                     if on_progress:
                         on_progress(f"正在准备第 {index}/{len(parts)} 段，优先使用已有配音…")
                     part = replace(normalized, text=text, request_id=uuid4().hex)
-                    audio: CachedSpeech = whole if whole and not force else cache.get_or_create(
-                        part, profile, cancel_event=cancel_event, force=force,
-                    )
+                    for attempt in range(2):
+                        try:
+                            audio: CachedSpeech = whole if whole and not force else cache.get_or_create(
+                                part, profile, cancel_event=cancel_event, force=force,
+                            )
+                            break
+                        except Exception as exc:
+                            memory_error = isinstance(exc, MemoryError) or any(
+                                token in str(exc).lower() for token in ("out of memory", "显存不足", "内存不足"))
+                            if attempt or prefetch <= 1 or not memory_error or self._is_cancelled():
+                                raise
+                            credits.reduce()
+                            credits.release()
+                            if on_progress:
+                                on_progress("内存不足，已退回提前准备 1 段，正在重试当前段…")
+                            while not credits.acquire(timeout=0.05):
+                                if self._is_cancelled():
+                                    return
+                            if self._is_cancelled():
+                                return
                     if self._is_cancelled():
                         return
                     generated_paths.append(audio.path)

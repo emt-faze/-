@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from wuwa_dubber.app import configure_chinese_font
-from wuwa_dubber.config import AppConfig, AppPaths
+from wuwa_dubber.config import AppConfig, AppPaths, load_config
 from wuwa_dubber.models import VoiceProfile
 from wuwa_dubber.ui.main_window import MainWindow
 from wuwa_dubber.voice_profiles import VoiceProfileStore
@@ -34,6 +34,22 @@ def main() -> None:
             assert window.backend_combo.currentData() == "qwen3-tts"
             assert window.tts_endpoint.text() == "http://127.0.0.1:9882"
             assert window.tts_endpoint.isEnabled()
+            assert window.first_segment_limit.value() == 10
+            assert window.segment_limit.value() == 36 and window.prefetch_window.value() == 2
+            assert window.stability_frames.value() == 2
+            window.first_segment_limit.setValue(0)
+            window.segment_limit.setValue(48)
+            window.prefetch_window.setValue(3)
+            window.stability_frames.setValue(3)
+            window._save_controls()
+            restored = load_config(paths)
+            assert restored.first_segment_max_chars == 0 and restored.segment_max_chars == 48
+            assert restored.prefetch_window == 3 and restored.stability_frames == 3
+            window.first_segment_limit.setValue(10)
+            window.segment_limit.setValue(36)
+            window.prefetch_window.setValue(2)
+            window.stability_frames.setValue(2)
+            window._save_controls()
             window.backend_combo.setCurrentIndex(window.backend_combo.findData("gpt-sovits"))
             assert window.tts_endpoint.text() == "http://127.0.0.1:9881"
             window.backend_combo.setCurrentIndex(window.backend_combo.findData("qwen3-tts"))

@@ -24,6 +24,10 @@ class ReleaseSetupTests(unittest.TestCase):
             self.assertEqual(config["tts_backend"], "qwen3-tts")
             self.assertGreaterEqual(len(config["tts_token"]), 32)
             self.assertEqual(runtime["model_root"], "../local-voice-model")
+            self.assertEqual(config["stability_frames"], 2)
+            self.assertEqual(config["first_segment_max_chars"], 10)
+            self.assertEqual(config["segment_max_chars"], 36)
+            self.assertEqual(config["prefetch_window"], 2)
 
     def test_basic_reinstall_preserves_existing_settings_and_audio(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -31,7 +35,8 @@ class ReleaseSetupTests(unittest.TestCase):
             configure_install.configure(root)
             data = root / "wuwa-dubber/data"
             config = json.loads((data / "config.json").read_text(encoding="utf-8"))
-            config.update(output_device=8, narrator_profile="我的旁白", tts_backend="gpt-sovits")
+            config.update(output_device=8, narrator_profile="我的旁白", tts_backend="gpt-sovits",
+                          stability_frames=3, prefetch_window=1)
             configure_install.write_json(data / "config.json", config)
             audio = data / "cache/keep.wav"
             audio.write_bytes(b"test-existing-audio")

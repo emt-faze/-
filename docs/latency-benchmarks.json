@@ -1,0 +1,260 @@
+{
+  "version": "0.5.0",
+  "measurement_date": "2026-10-30",
+  "hardware": "NVIDIA GeForce RTX 5060 Laptop GPU, 8 GB",
+  "model": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "model_revision": "5d83992436eae1d760afd27aff78a71d676296fc",
+  "speaker": "伊洛伊",
+  "reference_included": false,
+  "playback": "silent timing by WAV duration",
+  "live_game_tested": false,
+  "voice_similarity_listening_verified": false,
+  "latency_targets_met": false,
+  "baseline_cold_timing_ms": {
+    "model_load": 0.0,
+    "ref_encode": 3812.558,
+    "text_prepare": 5.008,
+    "infer": 13978.219,
+    "wav_write": 2.331,
+    "other": 162.272,
+    "total": 17960.387
+  },
+  "baseline_hot_median_seconds": 10.199,
+  "warmed_request_median_seconds": 12.201,
+  "split_comparison": {
+    "text": "今天的天气很不错，我们一起出去走走吧。",
+    "repeats_each": 3,
+    "before": {
+      "first_audio_seconds": 21.391,
+      "elapsed_seconds": 25.235,
+      "synthesis_seconds": 21.343
+    },
+    "after": {
+      "first_audio_seconds": 10.766,
+      "elapsed_seconds": 20.875,
+      "synthesis_seconds": 19.109
+    }
+  },
+  "prefetch_comparison": {
+    "text": "今天的天气很不错。我们一起出去走走吧。路上小心。",
+    "repeats_each": 3,
+    "before": {
+      "first_audio_seconds": 10.094,
+      "elapsed_seconds": 28.532,
+      "synthesis_seconds": 27.172,
+      "max_gap_seconds": 6.75
+    },
+    "after": {
+      "first_audio_seconds": 10.219,
+      "elapsed_seconds": 27.141,
+      "synthesis_seconds": 25.766,
+      "max_gap_seconds": 6.969
+    }
+  },
+  "inference_variants": {
+    "bf16": {
+      "median_seconds": 11.466,
+      "median_rtf": 5.3083,
+      "same_audio_all_runs": true,
+      "production_defaults_changed": false,
+      "runs": [
+        {
+          "seconds": 11.728,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb"
+        },
+        {
+          "seconds": 11.104,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb"
+        },
+        {
+          "seconds": 11.466,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb"
+        }
+      ]
+    },
+    "tf32": {
+      "median_seconds": 9.301,
+      "median_rtf": 5.0549,
+      "same_audio_all_runs": true,
+      "production_defaults_changed": false,
+      "runs": [
+        {
+          "seconds": 11.433,
+          "audio_seconds": 1.84,
+          "token_count": 24,
+          "sha256": "8ecdb479a74719ba5ce2d81fda1c0a488d9363f117af5a7ad166199646d4d750"
+        },
+        {
+          "seconds": 8.758,
+          "audio_seconds": 1.84,
+          "token_count": 24,
+          "sha256": "8ecdb479a74719ba5ce2d81fda1c0a488d9363f117af5a7ad166199646d4d750"
+        },
+        {
+          "seconds": 9.301,
+          "audio_seconds": 1.84,
+          "token_count": 24,
+          "sha256": "8ecdb479a74719ba5ce2d81fda1c0a488d9363f117af5a7ad166199646d4d750"
+        }
+      ]
+    },
+    "fp16": {
+      "production_defaults_changed": false,
+      "runs": [],
+      "failure": "CUDA device-side assert during warmup"
+    },
+    "compile": {
+      "error_type": "TritonMissing",
+      "probe_seconds": 35.76,
+      "probe_succeeded": false,
+      "production_defaults_changed": false,
+      "runs": []
+    },
+    "token-cap": {
+      "median_seconds": 9.418,
+      "median_rtf": 4.3602,
+      "same_audio_all_runs": true,
+      "production_defaults_changed": false,
+      "runs": [
+        {
+          "seconds": 9.418,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb"
+        },
+        {
+          "seconds": 9.373,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb"
+        },
+        {
+          "seconds": 9.544,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb"
+        }
+      ]
+    },
+    "token-paired": {
+      "median_seconds": 10.899000000000001,
+      "median_rtf": 5.04585,
+      "same_audio_all_runs": true,
+      "median_seconds_by_budget": {
+        "1024": 11.75,
+        "128": 10.885
+      },
+      "production_defaults_changed": false,
+      "runs": [
+        {
+          "seconds": 10.697,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb",
+          "max_new_tokens": 1024
+        },
+        {
+          "seconds": 10.885,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb",
+          "max_new_tokens": 128
+        },
+        {
+          "seconds": 10.913,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb",
+          "max_new_tokens": 128
+        },
+        {
+          "seconds": 11.909,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb",
+          "max_new_tokens": 1024
+        },
+        {
+          "seconds": 11.75,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb",
+          "max_new_tokens": 1024
+        },
+        {
+          "seconds": 9.818,
+          "audio_seconds": 2.16,
+          "token_count": 28,
+          "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb",
+          "max_new_tokens": 128
+        }
+      ]
+    }
+  },
+  "final_hot": {
+    "text": "今天的天气很不错。",
+    "median_seconds": 9.51,
+    "runs": [
+      {
+        "seconds": 9.51,
+        "audio_seconds": 2.16,
+        "timing_ms": {
+          "model_load": 0.0,
+          "ref_encode": 1.494,
+          "text_prepare": 0.641,
+          "infer": 9506.791,
+          "wav_write": 0.497,
+          "other": 0.774,
+          "total": 9510.196
+        },
+        "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb"
+      },
+      {
+        "seconds": 9.423,
+        "audio_seconds": 2.16,
+        "timing_ms": {
+          "model_load": 0.0,
+          "ref_encode": 1.398,
+          "text_prepare": 0.768,
+          "infer": 9419.177,
+          "wav_write": 0.483,
+          "other": 0.945,
+          "total": 9422.771
+        },
+        "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb"
+      },
+      {
+        "seconds": 9.603,
+        "audio_seconds": 2.16,
+        "timing_ms": {
+          "model_load": 0.0,
+          "ref_encode": 1.54,
+          "text_prepare": 0.629,
+          "infer": 9600.045,
+          "wav_write": 0.478,
+          "other": 0.694,
+          "total": 9603.386
+        },
+        "sha256": "5f6ba50b2197ccab5e01f67f49fb6819c774f23d88d11e4b97486f1c0f6dfbbb"
+      }
+    ]
+  },
+  "cache_median_first_audio_seconds": {
+    "before": 0.062,
+    "after": 0.062
+  },
+  "cache_synthesis_calls": 0,
+  "cancellation_seconds": 0.75,
+  "cancelled_audio_played": false,
+  "cancelled_audio_cached": false,
+  "ocr_confirmation_seconds_at_5_fps": {
+    "three_frames": 0.4,
+    "two_frames": 0.2
+  }
+}

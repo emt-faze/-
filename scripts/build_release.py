@@ -11,6 +11,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 FIXED_FILES = (
     ".gitignore", ".gitattributes", "README.md", "THIRD_PARTY_NOTICES.md",
+    "docs/latency-benchmarks.json",
     "安装基础环境.bat", "安装角色配音模型.bat", "启动AI配音.bat", "打开设置.bat", "停止本地模型.bat",
     "wuwa-dubber/README.md", "wuwa-dubber/使用说明.txt", "wuwa-dubber/pyproject.toml",
     "wuwa-dubber/start-ai-dubbing.bat", "wuwa-dubber/start-wuwa-dubber.bat",

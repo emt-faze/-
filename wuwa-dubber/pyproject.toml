@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wuwa-ai-dubber"
-version = "0.4.0"
+version = "0.5.0"
 description = "Local OCR and character dubbing with sentence caching and progressive playback"
 readme = "README.md"
 requires-python = ">=3.11"

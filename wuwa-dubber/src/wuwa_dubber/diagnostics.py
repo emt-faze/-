@@ -39,7 +39,8 @@ def collect_diagnostics(config: AppConfig, voice_store: VoiceProfileStore) -> li
         if hasattr(client, "timeout"):
             client.timeout = 5.0
         health = client.health()
-        items.append(DiagnosticItem("当前朗读引擎", "ok", str(health)))
+        detail = "模型预热中…可继续操作，试听将优先处理。" if health.get("warming") else str(health)
+        items.append(DiagnosticItem("当前朗读引擎", "ok", detail))
     except Exception as exc:
         items.append(DiagnosticItem("当前朗读引擎", "missing", str(exc)))
     errors = config.validate()

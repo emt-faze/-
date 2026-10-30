@@ -30,7 +30,7 @@ def endpoint_for_backend(backend: str, current: str) -> str:
 class AppConfig:
     capture: CaptureProfile = field(default_factory=CaptureProfile)
     sample_fps: float = 5.0
-    stability_frames: int = 3
+    stability_frames: int = 2
     dedupe_history: int = 5
     speaker_match_threshold: float = 0.82
     pending_queue_limit: int = 2
@@ -45,6 +45,10 @@ class AppConfig:
     narrator_profile: str = "旁白"
     use_fake_tts: bool = False
     log_ocr_text: bool = True
+    warmup_speaker: str = ""
+    first_segment_max_chars: int = 10
+    segment_max_chars: int = 36
+    prefetch_window: int = 2
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +69,10 @@ class AppConfig:
             "narrator_profile": self.narrator_profile,
             "use_fake_tts": self.use_fake_tts,
             "log_ocr_text": self.log_ocr_text,
+            "warmup_speaker": self.warmup_speaker,
+            "first_segment_max_chars": self.first_segment_max_chars,
+            "segment_max_chars": self.segment_max_chars,
+            "prefetch_window": self.prefetch_window,
         }
 
     @classmethod
@@ -95,6 +103,10 @@ class AppConfig:
             narrator_profile=str(value.get("narrator_profile", defaults.narrator_profile)),
             use_fake_tts=bool(value.get("use_fake_tts", defaults.use_fake_tts)),
             log_ocr_text=bool(value.get("log_ocr_text", defaults.log_ocr_text)),
+            warmup_speaker=str(value.get("warmup_speaker", defaults.warmup_speaker)),
+            first_segment_max_chars=max(0, min(300, int(value.get("first_segment_max_chars", defaults.first_segment_max_chars)))),
+            segment_max_chars=max(4, min(300, int(value.get("segment_max_chars", defaults.segment_max_chars)))),
+            prefetch_window=max(1, min(3, int(value.get("prefetch_window", defaults.prefetch_window)))),
         )
 
     def validate(self) -> list[str]:

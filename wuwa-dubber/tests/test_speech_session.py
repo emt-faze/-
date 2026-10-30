@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import wave
 from pathlib import Path
 
@@ -130,6 +131,89 @@ def test_existing_whole_utterance_cache_is_used_before_splitting(tmp_path: Path)
         Utterance(TEXT), profile, cancel_event=threading.Event())
     assert len(model.calls) == 1
     assert report.total_segments == 1 and report.cache_hits == 1 and report.paths == (whole.path,)
+
+
+def test_latency_upgrade_reuses_all_existing_legacy_sentence_audio(tmp_path: Path):
+    config = AppConfig(tts_backend="qwen3-tts")
+    model, profile = Model(), VoiceProfile("旁白")
+    cache = SpeechCache(config, tmp_path, model)
+    parts = ["今天的天气很不错，我们一起出去走走吧。", "接着再去看看新开的书店。"]
+    original = [cache.get_or_create(Utterance(text), profile, cancel_event=threading.Event()).path for text in parts]
+    report = SpeechSession(config, tmp_path, model, Player()).run(
+        Utterance("".join(parts)), profile, cancel_event=threading.Event())
+    assert report.paths == tuple(original)
+    assert report.cache_hits == 2 and len(model.calls) == 2
+
+
+def test_configured_two_segment_prefetch_is_bounded_and_plays_in_order(tmp_path: Path):
+    model, player = Model(), Player(hold_first=True)
+    config = AppConfig(tts_backend="qwen3-tts", first_segment_max_chars=0, prefetch_window=2)
+    session = SpeechSession(config, tmp_path, model, player)
+    text = TEXT + "第四句话最后才会播放。"
+    thread, results, errors = background(session, text)
+    try:
+        assert player.started.wait(2)
+        deadline = time.monotonic() + 2
+        while len(model.calls) < 3 and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert len(model.calls) == 3 and len(player.paths) == 1
+        player.release.set()
+        thread.join(3)
+        assert not thread.is_alive() and not errors
+        assert len(player.paths) == 4 and results[0].total_segments == 4
+        assert "".join(model.calls) == text
+    finally:
+        session.cancel()
+        thread.join(3)
+
+
+def test_memory_failure_reduces_prefetch_and_retries_only_once(tmp_path: Path):
+    class MemoryModel(Model):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+        def synthesize(self, utterance, profile, output):
+            if len(self.calls) == 1 and not self.failed:
+                self.failed = True
+                raise MemoryError("simulated out of memory")
+            return super().synthesize(utterance, profile, output)
+    model, progress = MemoryModel(), []
+    config = AppConfig(tts_backend="qwen3-tts", first_segment_max_chars=0, prefetch_window=2)
+    report = SpeechSession(config, tmp_path, model, Player()).run(
+        Utterance(TEXT), VoiceProfile("旁白"), cancel_event=threading.Event(), on_progress=progress.append)
+    assert model.failed and report.total_segments == 3
+    assert any("退回" in message for message in progress)
+    assert len(list(tmp_path.glob("*.wav"))) == 3
+
+
+def test_cancel_in_second_lookahead_discards_inflight_audio(tmp_path: Path):
+    model, player = Model(hold_call=3), Player(hold_first=True)
+    config = AppConfig(tts_backend="qwen3-tts", first_segment_max_chars=0, prefetch_window=2)
+    session = SpeechSession(config, tmp_path, model, player)
+    thread, results, errors = background(session, TEXT + "第四句话不会播放。")
+    assert player.started.wait(2) and model.held.wait(2)
+    session.cancel()
+    thread.join(3)
+    assert not thread.is_alive() and not results
+    assert len(errors) == 1 and isinstance(errors[0], SpeechCancelled)
+    assert len(player.paths) == 1 and len(model.calls) == 3
+    assert len(list(tmp_path.glob("*.wav"))) == 2
+
+
+def test_persistent_memory_failure_is_reported_after_one_retry(tmp_path: Path):
+    class ExhaustedModel(Model):
+        def synthesize(self, utterance, profile, output):
+            self.calls.append(utterance.text)
+            raise MemoryError("simulated out of memory")
+    model, player = ExhaustedModel(), Player()
+    config = AppConfig(tts_backend="qwen3-tts", prefetch_window=2)
+    session = SpeechSession(config, tmp_path, model, player)
+    thread, results, errors = background(session)
+    thread.join(3)
+    assert not thread.is_alive() and not results
+    assert len(errors) == 1 and isinstance(errors[0], MemoryError), errors
+    assert len(model.calls) == 2 and not player.paths
+    assert not list(tmp_path.glob("*.wav"))
 
 
 def test_cancel_before_session_start_never_calls_model(tmp_path: Path):

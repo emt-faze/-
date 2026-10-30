@@ -1,1 +1,1 @@
-df72d35f04cbb037a5f1cb1e8b4e9158f77d38f3bcac6c2520dd68efc7eb883a  game-dubbing-v0.4.0.zip
+fd46feb3901850ee8da55066ab7aa9079fab35098a9b69d86ef917210519e8d8  game-dubbing-v0.5.0.zip
