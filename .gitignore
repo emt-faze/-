@@ -1,0 +1,39 @@
+# Local user data and credentials
+**/data/
+**/.env
+**/.env.*
+**/secrets.*
+**/credentials.*
+# Installed runtimes, models and downloaded assets
+**/.venv/
+**/.venv-backup-*/
+**/models/
+**/downloads/
+**/character-references/
+**/prepared-data/
+**/samples/
+**/logs/
+**/backups/
+**/artifacts/
+**/验证结果/
+# Build and local test output
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+outputs/
+.coverage
+*.part
+*.zip
+!releases/*.zip
+*.7z
+*.wav
+*.mp3
+*.mp4
+*.safetensors
+*.pth
+*.pt
+.DS_Store
+Thumbs.db

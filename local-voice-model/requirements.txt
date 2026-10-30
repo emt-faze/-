@@ -1,0 +1,15 @@
+qwen-tts==0.1.1
+torch==2.9.1+cu128
+torchaudio==2.9.1+cu128
+transformers==4.57.3
+accelerate==1.12.0
+huggingface-hub==0.36.0
+gradio==5.49.1
+librosa==0.11.0
+numpy==2.2.6
+numba==0.61.2
+scipy==1.15.3
+scikit-learn==1.6.1
+soundfile==0.13.1
+onnxruntime==1.23.2
+imageio-ffmpeg==0.6.0
