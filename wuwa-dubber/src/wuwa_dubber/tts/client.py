@@ -133,6 +133,11 @@ class Qwen3TtsClient(GPTSoVITSClient):
             self._active_request_id = request.request_id
         try:
             return super().synthesize(request, profile, output)
+        except Exception:
+            # A socket timeout does not stop the server's generation. Cancel
+            # while the active ID is still available, then release this client.
+            self.cancel()
+            raise
         finally:
             with self._active_lock:
                 if self._active_request_id == request.request_id:

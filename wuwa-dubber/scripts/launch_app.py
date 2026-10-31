@@ -11,12 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
+    sys.path.insert(0, str(ROOT / "src"))
+    from wuwa_dubber.tts.url_policy import managed_qwen_port
     data_root = Path(os.environ.get("WUWA_DUBBER_DATA", ROOT / "data")).expanduser().resolve()
     config_file = data_root / "config.json"
     config = json.loads(config_file.read_text(encoding="utf-8-sig")) if config_file.is_file() else {}
     qwen = config.get("tts_backend") == "qwen3-tts" and not config.get("use_fake_tts")
     endpoint = str(config.get("tts_endpoint", "http://127.0.0.1:9882")).rstrip("/")
-    managed_endpoint = endpoint in {"http://127.0.0.1:9882", "http://localhost:9882"}
+    port = managed_qwen_port(endpoint)
+    managed_endpoint = port is not None
     if qwen and not managed_endpoint:
         print("当前使用自定义语音服务地址，请确保对应服务已经启动。")
     if qwen and managed_endpoint:
@@ -33,7 +36,7 @@ def main() -> int:
             print(f"找不到本地模型启动脚本：{starter}")
             return 1
         code = subprocess.call(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                                str(starter), "-AppConfig", str(config_file)])
+                                str(starter), "-AppConfig", str(config_file), "-Port", str(port)])
         if code:
             print("模型未就绪，请检查模型日志。也可以用原启动方式打开设置，切换系统中文朗读。")
             return code

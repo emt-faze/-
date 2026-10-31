@@ -1,3 +1,5 @@
+> 本目录现包含 **台词生成工具 v0.4.3**，推荐从[根目录 README](../README.md)安装，使用[台词生成器指南](../docs/台词生成工具使用指南.md)。`VERSION` 保留独立 OCR 发布基线，生成器版本见 `GENERATOR_VERSION`。下文保留独立 OCR 的原始说明。
+
 # 异环 · 对话文字识别
 
 用于 Windows PC 版《异环》的本地对话识别工具。当前版本为 **v5.0.0 开发预览版**，默认通过 WGC 获取游戏窗口，用 RapidOCR 的 PP-OCRv6 small 显示首次结果、medium 复核同一条台词。

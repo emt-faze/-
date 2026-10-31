@@ -214,6 +214,68 @@ class ProtocolTests(unittest.TestCase):
         self.assertFalse(self.engine.lock.locked())
         self.assertIsNone(self.engine.active_id)
 
+    def test_quality_settings_rebuild_prompt_cache(self):
+        self.engine.synthesize(self.payload())
+        self.engine.synthesize(self.payload())
+        self.assertEqual(self.model.prompt_calls, 1)
+        self.engine.inference.update(audio_tokenizer_dtype="float32", implementation_version=4)
+        self.engine.synthesize(self.payload())
+        self.assertEqual(self.model.prompt_calls, 2)
+        self.assertFalse(self.engine.last_metrics["prompt_cache_hit"])
+
+    def test_punctuation_and_all_generated_frames_are_preserved(self):
+        # Active final syllables must not be shortened by output processing.
+        text = "失误了啊，鉴定师。"
+        with patch.object(self.model, "generate_voice_clone", return_value=([[.25] * 55680], 24000)) as generate:
+            data, _ = self.engine.synthesize(self.payload(text=text))
+        self.assertEqual(generate.call_args.kwargs["text"], text)
+        self.assertEqual(generate.call_args.kwargs["repetition_penalty"], 1.0)
+        with wave.open(io.BytesIO(data), "rb") as audio:
+            self.assertEqual(audio.getnframes(), 55680)
+
+    def test_incomplete_attempt_is_retried_without_publishing_its_audio(self):
+        with patch.object(self.model, "generate_voice_clone", side_effect=[
+            qwen_server.IncompleteSpeech("partial"), ([[.25]*480], 24000),
+        ]) as generate:
+            data, metrics = self.engine.synthesize(self.payload())
+        self.assertEqual([call.kwargs["repetition_penalty"] for call in generate.call_args_list], [1.0, 1.05])
+        self.assertTrue(metrics["completion_retry"])
+        with wave.open(io.BytesIO(data), "rb") as audio:
+            self.assertEqual(audio.getnframes(), 480)
+
+    def test_repeated_incomplete_output_is_an_error_and_not_a_wav(self):
+        with patch.object(self.model, "generate_voice_clone", side_effect=qwen_server.IncompleteSpeech("partial")) as generate:
+            with self.assertRaises(qwen_server.IncompleteSpeech):
+                self.engine.synthesize(self.payload())
+        self.assertEqual(generate.call_count, 2)
+        self.assertIsNone(self.engine.last_metrics)
+        self.assertFalse(self.engine.lock.locked())
+
+    def test_cancelled_incomplete_output_never_starts_retry(self):
+        def cancelled(**kwargs):
+            self.engine.cancel_event.set()
+            raise qwen_server.IncompleteSpeech("partial")
+        with patch.object(self.model, "generate_voice_clone", side_effect=cancelled) as generate:
+            with self.assertRaises(qwen_server.IncompleteSpeech):
+                self.engine.synthesize(self.payload())
+        self.assertEqual(generate.call_count, 1)
+
+    def test_token_limit_without_end_token_is_not_a_complete_utterance(self):
+        class Sequence:
+            def __init__(self, ending):
+                self.ending = ending
+            def __getitem__(self, index):
+                return SimpleNamespace(tolist=lambda: [self.ending])
+        fake_transformers = SimpleNamespace(StoppingCriteria=object, StoppingCriteriaList=list)
+        with patch.dict("sys.modules", {"transformers": fake_transformers}):
+            partial = qwen_server._guard_generation(
+                lambda **kwargs: SimpleNamespace(sequences=Sequence(7)), self.engine.torch, self.engine.cancel_event)
+            complete = qwen_server._guard_generation(
+                lambda **kwargs: SimpleNamespace(sequences=Sequence(2150)), self.engine.torch, self.engine.cancel_event)
+        with self.assertRaises(qwen_server.IncompleteSpeech):
+            partial(eos_token_id=2150)
+        self.assertIsNotNone(complete(eos_token_id=2150))
+
     def test_diagnostic_json_preserves_wav_and_accounts_for_stage_timings(self):
         original = self.model.generate_voice_clone
         def delayed(**kwargs):

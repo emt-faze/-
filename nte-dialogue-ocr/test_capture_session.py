@@ -1,7 +1,7 @@
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import capture_session as capture
@@ -67,6 +67,21 @@ class CaptureSessionTests(unittest.TestCase):
                 broken.read()
             legacy.assert_not_called()
             broken.stop()
+
+    def test_initial_wgc_timeout_survives_capture_thread_for_startup_retry(self):
+        backend = Mock()
+        backend.start.return_value = backend
+        backend.read.side_effect = capture.CaptureTimeout('waiting for the first rendered frame')
+        with patch.object(capture, 'LegacyCapture', return_value=backend) as factory, \
+             patch.object(capture, 'enable_dpi_awareness'), \
+             patch.object(capture, 'visible_region', return_value=('ready', self.geometry)):
+            session = capture.CaptureSession(self.window, backend='wgc', interval_ms=10, first_frame_timeout=10).start()
+            session._thread.join(1)
+            with self.assertRaises(capture.CaptureTimeout):
+                session.read()
+            factory.assert_called_once_with(self.window, interval_ms=10, backend='wgc', first_frame_timeout=10)
+            session.stop()
+            backend.stop.assert_called_once_with()
 
     def test_minimized_foreground_and_occlusion_guards(self):
         def enum(callback, data):

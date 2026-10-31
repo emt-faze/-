@@ -25,8 +25,8 @@ CONFIG = ROOT / "config.json"
 
 
 def load_config():
-    source = CONFIG if CONFIG.exists() else ROOT / "config.example.json"
-    return json.loads(source.read_text(encoding="utf-8"))
+    source = CONFIG if CONFIG.is_file() else ROOT / "config.example.json"
+    return json.loads(source.read_text(encoding="utf-8-sig"))
 
 
 def save_config(config):
@@ -50,17 +50,42 @@ def check_geometry(frame, config, client_size=None):
         raise RuntimeError("游戏画面比例已改变，请重新框选文字区域")
 
 
-def run_loop(window, config, stop, callback, seconds=None, on_capture=None, presentation_queue=None):
+def run_loop(window, config, stop, callback, seconds=None, on_capture=None, presentation_queue=None,
+             on_record=None, on_state=None, on_session=None, on_observation=None, records_root=None,
+             on_frame_change=None, on_visual_observation=None):
+    from PySide6.QtCore import QLockFile
+    directory = Path(records_root) if records_root is not None else ROOT
+    directory.mkdir(parents=True, exist_ok=True)
+    lease = QLockFile(str(directory / "capture.lock"))
+    lease.setStaleLockTime(0)
+    if not lease.tryLock(0):
+        raise RuntimeError("另一个窗口正在识别，请先停止那里的识别再开始采集")
+    try:
+        return _run_loop(window, config, stop, callback, seconds, on_capture, presentation_queue,
+                         on_record, on_state, on_session, on_observation, directory, on_frame_change, on_visual_observation)
+    finally:
+        lease.unlock()
+
+
+def _run_loop(window, config, stop, callback, seconds=None, on_capture=None, presentation_queue=None,
+              on_record=None, on_state=None, on_session=None, on_observation=None, records_root=None,
+              on_frame_change=None, on_visual_observation=None):
     from ocr_engines import make_ocr
     from frame_gate import FrameStability
+    if stop.is_set():
+        return
     if not config.get("calibrated") or not config.get("body_roi"):
         raise RuntimeError("尚未根据实际对话画面校准正文区域")
     if window.is_launcher:
         raise RuntimeError("当前是启动器，请进入游戏后刷新窗口列表")
     callback({"status_text": "正在加载本地中文模型…"})
     engine = make_ocr(config)
+    if stop.is_set():
+        return
     stability=FrameStability(config.get('render_stable_seconds',.45))
-    recorder = Recorder(ROOT, engine.session_id)
+    recorder = Recorder(records_root if records_root is not None else ROOT, engine.session_id)
+    if on_session:
+        on_session(recorder.directory)
     capture = CaptureSession(window, backend=config.get("capture_backend", "wgc"),
                              interval_ms=round(1000/config.get("capture_fps", 5)),
                              rois=[config["body_roi"], config.get("speaker_roi")],
@@ -99,6 +124,8 @@ def run_loop(window, config, stop, callback, seconds=None, on_capture=None, pres
                 event, evidence = publication
                 callback({"event": event, "status_text": "识别中 · "+STATUS_LABELS[event["status"]]})
                 record = recorder.upsert(event, evidence)
+                if on_record and not stop.is_set():
+                    on_record(record)
                 callback({"event": record, "persisted": True})
                 publication = None
                 continue
@@ -109,6 +136,8 @@ def run_loop(window, config, stop, callback, seconds=None, on_capture=None, pres
                 publication = (engine.verify(identity), None)
                 continue
             if not capture.ready_for_ocr():
+                if on_state:
+                    on_state("unavailable")
                 engine.pause(now=now)
                 stability.reset()
                 if now-status_at >= .5:
@@ -122,16 +151,26 @@ def run_loop(window, config, stop, callback, seconds=None, on_capture=None, pres
                 continue
             last_sequence = packet.sequence
             check_geometry(packet.image, config, packet.client_size)
-            body,_=engine.region_image(packet.image,engine.body_roi,packet.client_size,packet.origin)
+            body,body_offset=engine.region_image(packet.image,engine.body_roi,packet.client_size,packet.origin)
             if not stability.ready(body,packet.captured_at):
                 if now-status_at>=.5:
                     callback({'status_text':'正在等待文字显示完整…'})
                     status_at=now
                 continue
+            if on_frame_change and not stability.unchanged:
+                # Stop old prepared audio before OCR spends time reading the
+                # new stable glyphs. Revision callbacks may refer to old pages.
+                on_frame_change(packet.captured_at)
             result = engine.process_frame(packet.image, now=now, client_size=packet.client_size,
                                           origin=packet.origin, captured_at=packet.captured_at,
                                           reuse_body=stability.unchanged)
             stability.commit()
+            if on_visual_observation and result.get('observation'):
+                on_visual_observation(body,result['observation'],body_offset)
+            if on_state and result["status"] == "blank":
+                on_state("blank")
+            if on_observation and result.get("observation"):
+                on_observation(dict(result["observation"], render_stable=True))
             event = result.get("event")
             if event:
                 event["capture_backend"] = capture.backend_name
@@ -169,7 +208,36 @@ def run_loop(window, config, stop, callback, seconds=None, on_capture=None, pres
         (recorder.directory/"session.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def gui(autoconnect=False):
+def run_connected(window, config, stop, callback, seconds=None, on_capture=None,
+                  presentation_queue=None, on_dubber=None):
+    """The same OCR-to-audio flow is used by the GUI and the headless runner."""
+    controller = None
+    try:
+        if config.get("dubbing", {}).get("enabled", False):
+            from dialogue_dubbing import VoiceRuntime, DubbingController
+            options = config["dubbing"]
+            runtime = VoiceRuntime(options)
+            runtime.prepare(stop, lambda text: callback({"speech": {"state": "starting", "message": text}}))
+            if stop.is_set():
+                return
+            controller = DubbingController(runtime, callback, policy=options.get("policy", "verified"))
+            if on_dubber:
+                on_dubber(controller)
+        if stop.is_set():
+            return
+        run_loop(window, config, stop, callback, seconds, on_capture, presentation_queue,
+                 on_record=controller.accept if controller else None,
+                 on_state=(lambda state: controller.suspend(
+                     "台词已消失，已停止配音" if state == "blank" else "画面暂不可用，恢复后确认当前台词再配音",
+                     resume_when_visible=state != "blank")) if controller else None,
+                 on_session=controller.set_directory if controller else None,
+                 on_observation=controller.confirm_visible if controller else None)
+    finally:
+        if controller:
+            controller.close()
+
+
+def gui(autoconnect=False, dubbing=False):
     from PySide6 import QtCore, QtGui, QtWidgets
     from ocr_core import crop_roi
     from game_launch import ensure_game, is_admin, relaunch_admin, activate_game
@@ -216,14 +284,21 @@ def gui(autoconnect=False):
             super().__init__(parent)
             self.window = window
             self.capture = None
+            self.dubber = None
+            self.voice_paused = threading.Event()
             self.presentation_queue = queue.SimpleQueue()
             self.presented = set()
             self.config = dict(config)
             self.stop_event = threading.Event()
         def run(self):
+            def attach_dubber(dubber):
+                self.dubber = dubber
+                if self.voice_paused.is_set():
+                    dubber.pause(True)
             try:
-                run_loop(self.window, self.config, self.stop_event, self.message.emit,
+                run_connected(self.window, self.config, self.stop_event, self.message.emit,
                          on_capture=lambda capture: setattr(self, "capture", capture),
+                         on_dubber=attach_dubber,
                          presentation_queue=self.presentation_queue)
             except Exception as exc:
                 self.message.emit({"error": str(exc)})
@@ -265,21 +340,24 @@ def gui(autoconnect=False):
         def __init__(self):
             super().__init__()
             self.config = load_config()
+            self.config.setdefault("dubbing", {})
+            if dubbing:
+                self.config["dubbing"]["enabled"] = True
             self.worker = None
             self.launch_worker = None
             self.launch_result = None
             self.snapshot_worker = None
             self.history_items = {}
             self.latest_dialogue_id = None
-            self.setWindowTitle("异环 · 对话文字识别")
-            self.resize(860, 720)
+            self.setWindowTitle("异环 · 游戏识别与自动配音")
+            self.resize(900, 850)
             layout = QtWidgets.QVBoxLayout(self)
-            title = QtWidgets.QLabel("异环对话识别")
+            title = QtWidgets.QLabel("异环 · 自动识别与角色配音")
             title.setStyleSheet("font-size:24px; font-weight:600; padding:8px 0")
             layout.addWidget(title)
-            layout.addWidget(QtWidgets.QLabel("本地识别并记录对话。首次使用先停在对话画面，框选正文。"))
+            layout.addWidget(QtWidgets.QLabel("打开游戏 → 读取角色与台词 → 匹配声线 → 生成并播放语音"))
             row = QtWidgets.QHBoxLayout()
-            self.connect_button = QtWidgets.QPushButton("自动打开游戏并连接")
+            self.connect_button = QtWidgets.QPushButton("一键打开游戏并开始")
             self.connect_button.clicked.connect(self.connect_game)
             row.addWidget(self.connect_button, 1)
             self.path_button = QtWidgets.QPushButton("选择启动器")
@@ -306,6 +384,48 @@ def gui(autoconnect=False):
             self.background_choice.toggled.connect(self.set_background)
             layout.addWidget(self.background_choice)
             row = QtWidgets.QHBoxLayout()
+            self.dub_choice = QtWidgets.QCheckBox("识别后自动配音")
+            self.dub_choice.setChecked(self.config["dubbing"].get("enabled", False))
+            self.dub_choice.toggled.connect(self.set_dubbing)
+            row.addWidget(self.dub_choice)
+            self.dub_policy = QtWidgets.QComboBox()
+            self.dub_policy.addItem("复核一致后配音", "verified")
+            self.dub_policy.addItem("读稳定候选（更快，可能读错）", "candidate")
+            self.dub_policy.setCurrentIndex(max(0, self.dub_policy.findData(self.config["dubbing"].get("policy", "verified"))))
+            self.dub_policy.currentIndexChanged.connect(self.set_dubbing)
+            row.addWidget(self.dub_policy, 1)
+            self.voice_mode = QtWidgets.QComboBox()
+            self.voice_mode.addItem("角色模型", "character")
+            self.voice_mode.addItem("角色模型，40 秒无声转系统朗读", "fallback")
+            self.voice_mode.addItem("系统中文朗读（较快）", "system")
+            mode = self.config["dubbing"].get("mode", "character")
+            if mode != "system" and self.config["dubbing"].get("fallback_to_system"):
+                mode = "fallback"
+            self.voice_mode.setCurrentIndex(max(0, self.voice_mode.findData(mode)))
+            self.voice_mode.currentIndexChanged.connect(self.set_dubbing)
+            row.addWidget(self.voice_mode)
+            voice_settings = QtWidgets.QPushButton("参考音频与音量")
+            voice_settings.clicked.connect(self.open_voice_settings)
+            row.addWidget(voice_settings)
+            layout.addLayout(row)
+            self.speech_status = QtWidgets.QLabel("配音：等待启动。未配置的角色使用默认声线；新台词生成需要等待。")
+            self.speech_status.setWordWrap(True)
+            layout.addWidget(self.speech_status)
+            row = QtWidgets.QHBoxLayout()
+            self.pause_voice = QtWidgets.QPushButton("暂停配音")
+            self.pause_voice.setCheckable(True)
+            self.pause_voice.toggled.connect(self.pause_dubbing)
+            self.skip_voice = QtWidgets.QPushButton("跳过当前配音")
+            self.skip_voice.clicked.connect(lambda: self.worker.dubber.skip() if self.worker and self.worker.dubber else None)
+            self.retry_voice = QtWidgets.QPushButton("重播当前台词")
+            self.retry_voice.clicked.connect(lambda: self.worker.dubber.retry() if self.worker and self.worker.dubber else None)
+            for button in (self.pause_voice, self.skip_voice, self.retry_voice):
+                row.addWidget(button)
+            self.system_settings = QtWidgets.QPushButton("系统声线与试听")
+            self.system_settings.clicked.connect(self.open_system_settings)
+            row.addWidget(self.system_settings)
+            layout.addLayout(row)
+            row = QtWidgets.QHBoxLayout()
             self.windows = QtWidgets.QComboBox()
             row.addWidget(self.windows, 1)
             refresh = QtWidgets.QPushButton("刷新游戏窗口")
@@ -329,24 +449,24 @@ def gui(autoconnect=False):
             self.preview.setMinimumHeight(120)
             self.preview.setStyleSheet("background:#17202a; color:#dce4ed; padding:8px")
             layout.addWidget(self.preview)
-            calibration_preview = ROOT / "validation" / "stage2" / "calibrated-body.png"
-            if calibration_preview.exists():
-                pm = QtGui.QPixmap(str(calibration_preview))
-                self.preview.setPixmap(pm.scaled(800, 150, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+            if self.config.get("calibrated"):
+                self.preview.setText("已载入剧情对话区域 · 启动后显示实时画面")
             self.status = QtWidgets.QLabel("已校准，可启动" if self.config.get("calibrated") else "等待校准正文区域")
             self.status.setWordWrap(True)
             layout.addWidget(self.status)
             row = QtWidgets.QHBoxLayout()
             self.start_button = QtWidgets.QPushButton("启动识别")
             self.start_button.clicked.connect(self.start)
-            self.stop_button = QtWidgets.QPushButton("停止识别")
+            self.stop_button = QtWidgets.QPushButton("停止识别和配音")
             self.stop_button.clicked.connect(self.stop)
             self.stop_button.setEnabled(False)
             records = QtWidgets.QPushButton("打开识别记录")
             records.clicked.connect(self.open_records)
             review_button = QtWidgets.QPushButton("真实台词验收")
             review_button.clicked.connect(self.open_review)
-            for button in (self.start_button, self.stop_button, records, review_button):
+            generator_button = QtWidgets.QPushButton("台词生成工具")
+            generator_button.clicked.connect(self.open_generator)
+            for button in (self.start_button, self.stop_button, records, review_button, generator_button):
                 row.addWidget(button)
             layout.addLayout(row)
             self.current = QtWidgets.QPlainTextEdit()
@@ -383,6 +503,44 @@ def gui(autoconnect=False):
             self.config["wgc_background"] = bool(enabled)
             save_config(self.config)
 
+        def set_dubbing(self, *_):
+            self.config["dubbing"].update(enabled=self.dub_choice.isChecked(), policy=self.dub_policy.currentData())
+            mode = self.voice_mode.currentData()
+            self.config["dubbing"].update(mode="system" if mode == "system" else "character",
+                                          fallback_to_system=mode == "fallback", wait_seconds=40)
+            save_config(self.config)
+
+        def pause_dubbing(self, paused):
+            self.pause_voice.setText("继续配音" if paused else "暂停配音")
+            if self.worker:
+                (self.worker.voice_paused.set if paused else self.worker.voice_paused.clear)()
+                if self.worker.dubber:
+                    self.worker.dubber.pause(paused)
+
+        def open_voice_settings(self):
+            try:
+                from dialogue_dubbing import voice_paths
+                code, data = voice_paths(self.config["dubbing"])
+                env = dict(os.environ, PYTHONPATH=str(code / "src"), WUWA_DUBBER_DATA=str(data), PYTHONUTF8="1")
+                subprocess.Popen([str(Path(sys.executable).with_name("pythonw.exe")), "-m", "wuwa_dubber"],
+                                 cwd=code, env=env, creationflags=subprocess.CREATE_NO_WINDOW)
+                self.speech_status.setText("已打开声线设置，保存后请停止并重新开始本流程以应用修改。")
+            except Exception as exc:
+                self.speech_status.setText("打开声线设置失败：" + str(exc))
+
+        def open_system_settings(self):
+            if self.is_busy():
+                return
+            try:
+                from system_voice_dialog import SystemVoiceDialog
+                dialog = SystemVoiceDialog(self.config["dubbing"], self)
+                if dialog.exec() == QtWidgets.QDialog.Accepted:
+                    self.config["dubbing"] = dialog.result_options
+                    save_config(self.config)
+                    self.speech_status.setText("系统声线已保存，开始识别后生效。")
+            except Exception as exc:
+                self.speech_status.setText("系统声线设置未打开：" + str(exc))
+
         def choose_launcher(self):
             path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择官方启动器 NTEGame.exe",
                                                            self.config.get("launcher_path", ""), "启动器 (*.exe)")
@@ -403,7 +561,7 @@ def gui(autoconnect=False):
                 # A running game needs only screen read access. Do not prompt
                 # for elevation or send input just to attach the OCR worker.
                 games = [w for w in list_game_windows() if not w.is_launcher]
-                if games:
+                if games and not self.dub_choice.isChecked():
                     self.refresh()
                     for index in range(self.windows.count()):
                         if self.windows.itemData(index).hwnd == games[0].hwnd:
@@ -413,10 +571,10 @@ def gui(autoconnect=False):
                     if self.config.get("calibrated"):
                         self.start()
                     return
-                if not is_admin():
+                if not games and not is_admin():
                     self.status.setText("正在申请 Windows 管理员授权，以便操作官方启动器…")
                     QtWidgets.QApplication.processEvents()
-                    relaunch_admin(["--autoconnect"])
+                    relaunch_admin(["--autoconnect", *(["--dub"] if self.dub_choice.isChecked() else [])])
                     self.close()
                     return
                 self.launch_result = None
@@ -452,7 +610,8 @@ def gui(autoconnect=False):
             self.set_controls_busy(False)
             self.refresh()
             if (self.launch_result is not None and not self.launch_worker.stop_event.is_set()
-                    and self.config.get("calibrated") and self.config.get("startup_acceptance") == "accepted"):
+                    and self.config.get("calibrated")
+                    and (self.config.get("startup_acceptance") == "accepted" or self.dub_choice.isChecked())):
                 QtCore.QTimer.singleShot(100, self.start)
 
         def set_controls_busy(self, busy):
@@ -463,6 +622,10 @@ def gui(autoconnect=False):
             self.path_button.setEnabled(not busy)
             self.backend_choice.setEnabled(not busy)
             self.ocr_choice.setEnabled(not busy)
+            self.dub_choice.setEnabled(not busy)
+            self.dub_policy.setEnabled(not busy)
+            self.voice_mode.setEnabled(not busy)
+            self.system_settings.setEnabled(not busy)
             self.background_choice.setEnabled(not busy and self.config.get("capture_backend") == "wgc")
             for button in self.edit_buttons:
                 button.setEnabled(not busy)
@@ -540,6 +703,7 @@ def gui(autoconnect=False):
                 window = self.target()
                 if not self.config.get("calibrated"):
                     raise RuntimeError("请先框选实际对话正文区域")
+                self.pause_voice.setChecked(False)
                 self.worker = Worker(window, self.config, self)
                 self.worker.message.connect(self.update_result)
                 self.worker.finished.connect(self.stopped)
@@ -557,14 +721,24 @@ def gui(autoconnect=False):
                 self.status.setText("正在取消自动连接…")
             if self.worker:
                 self.worker.stop_event.set()
+                if self.worker.dubber:
+                    self.worker.dubber.stop()
                 self.status.setText("正在结束当前识别…")
 
         def stopped(self):
             self.set_controls_busy(False)
+            self.speech_status.setText("配音已停止。已完成的音频已保存在本次识别记录的 audio 文件夹；模型服务可另行停止。")
             if not self.status.text().startswith("错误"):
                 self.status.setText("已停止，记录已保存")
 
         def update_result(self, result):
+            if "speech" in result:
+                speech = result["speech"]
+                if speech.get("dialogue_id") and self.latest_dialogue_id and speech["dialogue_id"] != self.latest_dialogue_id:
+                    return
+                self.speech_status.setText("配音：" + speech["message"])
+                self.speech_status.setToolTip(speech.get("audio_path") or speech.get("path") or "")
+                return
             if "error" in result:
                 self.status.setText("错误："+result["error"])
                 return
@@ -612,6 +786,18 @@ def gui(autoconnect=False):
         def open_review(self):
             subprocess.Popen([str(Path(sys.executable).with_name("pythonw.exe")), str(ROOT/"review_samples.py")], cwd=ROOT)
 
+        def open_generator(self):
+            if self.is_busy():
+                self.status.setText("请先停止识别和配音，再打开台词生成工具。")
+                return
+            try:
+                from dialogue_generator_ui import GeneratorWindow
+                dialog = GeneratorWindow(self.config.get("dubbing", {}), self)
+                dialog.exec()
+                self.config = load_config()
+            except Exception as exc:
+                self.status.setText("台词生成工具未打开：" + str(exc))
+
         def closeEvent(self, event):
             if self.snapshot_worker and self.snapshot_worker.isRunning():
                 self.snapshot_worker.stop_event.set()
@@ -656,9 +842,21 @@ def main():
     parser.add_argument("--seconds", type=float)
     parser.add_argument("--autoconnect", action="store_true")
     parser.add_argument("--launch", action="store_true")
+    parser.add_argument("--dub", action="store_true", help="启用角色配音")
+    parser.add_argument("--check-dubbing", action="store_true", help="检查声线与语音服务，不打开游戏")
     parser.add_argument("--backend", choices=["mss", "wgc", "printwindow"])
     args = parser.parse_args()
     config = load_config()
+    if args.dub:
+        config.setdefault("dubbing", {})["enabled"] = True
+    if args.check_dubbing:
+        from dialogue_dubbing import VoiceRuntime
+        runtime = VoiceRuntime(config.get("dubbing", {}))
+        health = runtime.client.health()
+        print(json.dumps({"voice_profiles": list(runtime.profiles), "default_voice": runtime.config.narrator_profile,
+                          "backend": health.get("backend"), "status": health.get("status"),
+                          "data_root": str(runtime.data_root)}, ensure_ascii=True), flush=True)
+        return 0
     if args.backend:
         config["capture_backend"] = args.backend
     if args.launch:
@@ -672,6 +870,9 @@ def main():
         return 0
     if args.snapshot or args.headless:
         windows = [w for w in list_game_windows() if not w.is_launcher]
+        if args.headless and args.autoconnect:
+            from game_launch import ensure_game
+            windows = [ensure_game(config, progress=lambda text: print(text, flush=True))["window"]]
         if not windows:
             raise RuntimeError("尚未找到实际游戏窗口（启动器不算游戏画面）")
         if args.snapshot:
@@ -679,9 +880,12 @@ def main():
             write_png(Path(args.snapshot), frame)
             print(json.dumps({"size": [frame.shape[1], frame.shape[0]], "window": vars(windows[0])}, ensure_ascii=True))
         else:
-            run_loop(windows[0], config, threading.Event(), lambda result: print(json.dumps(result, ensure_ascii=True), flush=True), args.seconds)
+            stop = threading.Event()
+            import signal
+            signal.signal(signal.SIGINT, lambda *_: stop.set())
+            run_connected(windows[0], config, stop, lambda result: print(json.dumps(result, ensure_ascii=True), flush=True), args.seconds)
         return 0
-    return gui(args.autoconnect)
+    return gui(args.autoconnect, args.dub)
 
 
 if __name__ == "__main__":

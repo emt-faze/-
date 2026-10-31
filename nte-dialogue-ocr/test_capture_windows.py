@@ -194,8 +194,16 @@ class BackendTests(unittest.TestCase):
         self.assertIsNone(instance.read())
         self.assertEqual(instance.backend_name, "printwindow")
         forced = self.running_wgc("wgc")
-        with self.assertRaisesRegex(RuntimeError, "等待时限"):
+        with self.assertRaisesRegex(capture.CaptureTimeout, "等待时限"):
             forced.read()
+
+    def test_wgc_callback_failure_is_not_mislabeled_as_loading_timeout(self):
+        forced = self.running_wgc("wgc")
+        forced._wgc_failure = "window identity changed"
+        self.clock.return_value = 25
+        with self.assertRaisesRegex(RuntimeError, "identity changed") as raised:
+            forced.read()
+        self.assertNotIsInstance(raised.exception, capture.CaptureTimeout)
 
     def test_minimize_clears_pending_pixels_and_stops_print_worker(self):
         instance = self.running_wgc()

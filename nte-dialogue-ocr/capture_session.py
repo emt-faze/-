@@ -150,15 +150,16 @@ PAUSE_TEXT = {
 
 class CaptureSession:
     def __init__(self, window, interval_ms=200, backend="wgc", rois=None, max_age=.75,
-                 require_foreground=True):
+                 require_foreground=True, first_frame_timeout=2.5):
         if backend not in ("mss", "wgc", "printwindow"):
             raise ValueError("请选择 mss、wgc 或 printwindow；不会自动切换截图方式")
-        if interval_ms <= 0 or max_age <= 0:
+        if interval_ms <= 0 or max_age <= 0 or first_frame_timeout <= 0:
             raise ValueError("截图间隔和有效时间必须为正数")
         self.window, self.backend_name = window, backend
         self.interval = interval_ms / 1000
         self.rois, self.max_age = rois, max_age
         self.require_foreground = require_foreground
+        self.first_frame_timeout = first_frame_timeout
         self.fallback_reason = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -206,7 +207,7 @@ class CaptureSession:
                 mss_instance = mss.mss()
             else:
                 legacy = LegacyCapture(self.window, interval_ms=int(self.interval*1000),
-                                       backend=self.backend_name).start()
+                                       backend=self.backend_name, first_frame_timeout=self.first_frame_timeout).start()
             legacy_sequence = 0
             stable_geometry = None
             while not self._stop.is_set():

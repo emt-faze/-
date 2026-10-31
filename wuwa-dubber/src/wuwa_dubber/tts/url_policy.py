@@ -26,6 +26,17 @@ def validate_local_url(url: str) -> str:
     return url.rstrip("/")
 
 
+def managed_qwen_port(url: str) -> int | None:
+    """Return a locally managed IPv4 service port, excluding proxy subpaths."""
+    try:
+        parts = urllib.parse.urlsplit(validate_local_url(url))
+    except ValueError:
+        return None
+    if parts.hostname not in {"127.0.0.1", "localhost"} or parts.path:
+        return None
+    return parts.port or 80
+
+
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise urllib.error.URLError("本地 TTS 接口不允许重定向")

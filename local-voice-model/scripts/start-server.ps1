@@ -1,11 +1,12 @@
 ﻿param(
-    [ValidateRange(1, 65535)][int]$Port = 9882,
+    [ValidateRange(0, 65535)][int]$Port = 0,
     [string]$AppConfig = ""
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'server-common.ps1')
 $Paths = Get-VoicePaths -ProjectRoot (Split-Path -Parent $PSScriptRoot) -AppConfig $AppConfig -Port $Port
+$Port = $Paths.Port
 $StartupLock = $null
 $StdoutLog = ''
 $StderrLog = ''

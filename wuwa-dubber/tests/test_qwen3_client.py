@@ -88,6 +88,15 @@ def test_qwen3_cache_identity_uses_model_revision_not_live_metrics() -> None:
         assert first["model_revision"] == "rev-one"
 
 
+def test_managed_qwen_port_accepts_local_port_changes_only() -> None:
+    from wuwa_dubber.tts.url_policy import managed_qwen_port
+    assert managed_qwen_port("http://127.0.0.1:9883/") == 9883
+    assert managed_qwen_port("http://localhost:9882") == 9882
+    for url in ("http://example.com:9883", "http://127.0.0.1:9883/proxy", "https://localhost:9883",
+                "http://user:pass@localhost:9883", "http://localhost:9883?query=1"):
+        assert managed_qwen_port(url) is None
+
+
 def test_qwen3_cancel_targets_only_its_active_request(tmp_path: Path) -> None:
     client = Qwen3TtsClient("http://127.0.0.1:9882", "test")
     started = threading.Event()
@@ -125,9 +134,34 @@ def test_qwen3_cancel_targets_only_its_active_request(tmp_path: Path) -> None:
             worker.join(2)
         assert not worker.is_alive()
         client.cancel()
-        assert len(requests) == 2
+        # The failing transport also cancels before releasing its request ID.
+        assert len(requests) == 3
+        assert requests[2][0] == "/v1/cancel"
+        assert requests[2][1]["request_id"] == requests[0][1]["request_id"]
         assert client._active_request_id is None
         assert not (tmp_path / "cancelled.wav").exists()
+
+
+def test_qwen3_transport_timeout_cancels_server_before_releasing_id(tmp_path: Path) -> None:
+    client = Qwen3TtsClient("http://127.0.0.1:9882", "test", timeout=40)
+    requests = []
+    def request(path, *, payload=None, **kwargs):
+        requests.append((path, payload))
+        if path == "/v1/synthesize":
+            raise SynthesisError("timed out")
+        assert client._active_request_id == payload["request_id"]
+        return b'{}', "application/json"
+    with patch.object(client, "_request", side_effect=request):
+        try:
+            client.synthesize(Utterance("超时台词"), VoiceProfile("旁白"), tmp_path / "late.wav")
+        except SynthesisError:
+            pass
+        else:
+            raise AssertionError("A timed out request succeeded")
+    assert [path for path, payload in requests] == ["/v1/synthesize", "/v1/cancel"]
+    assert requests[0][1]["request_id"] == requests[1][1]["request_id"]
+    assert client._active_request_id is None
+    assert not (tmp_path / "late.wav").exists()
 
 
 def test_qwen3_http_sends_reference_and_authentication(tmp_path: Path) -> None:

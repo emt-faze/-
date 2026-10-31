@@ -1,8 +1,9 @@
-﻿param([ValidateRange(1, 65535)][int]$Port = 9882)
+﻿param([ValidateRange(0, 65535)][int]$Port = 0)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'server-common.ps1')
 $Paths = Get-VoicePaths -ProjectRoot (Split-Path -Parent $PSScriptRoot) -Port $Port
+$Port = $Paths.Port
 
 try {
     $Candidate = $null

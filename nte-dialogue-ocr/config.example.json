@@ -34,5 +34,11 @@
   "verify_scale": 2.0,
   "calibration_status": "needs_calibration",
   "centered_body": true,
-  "render_stable_seconds": 0.45
+  "render_stable_seconds": 0.45,
+  "dubbing": {
+    "code_root": "../wuwa-dubber",
+    "data_root": "../wuwa-dubber/data",
+    "mode": "system",
+    "enabled": false
+  }
 }

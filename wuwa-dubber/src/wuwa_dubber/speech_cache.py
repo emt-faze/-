@@ -104,6 +104,9 @@ class SpeechCache:
             "client": f"{type(self.client).__module__}.{type(self.client).__qualname__}",
             "engine": engine_settings, "client_settings": identity,
         }
+        if settings.get("tts_backend") == "windows-sapi":
+            payload["system_voice"] = profile.system_voice
+            payload["system_pitch"] = profile.system_pitch
         return payload, settings, reference_digest
 
     def _path(self, payload) -> Path:

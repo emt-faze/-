@@ -87,9 +87,11 @@ class VoiceProfile:
     reference_language: str = "zh"
     speed: float = 1.0
     enabled: bool = True
+    system_voice: str = ""
+    system_pitch: int = 0
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "speaker": self.speaker,
             "aliases": self.aliases,
             "reference_audio": self.reference_audio,
@@ -98,6 +100,9 @@ class VoiceProfile:
             "speed": self.speed,
             "enabled": self.enabled,
         }
+        if self.system_voice or self.system_pitch:
+            result.update(system_voice=self.system_voice, system_pitch=self.system_pitch)
+        return result
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "VoiceProfile":
@@ -109,6 +114,8 @@ class VoiceProfile:
             reference_language=str(value.get("reference_language", "zh")),
             speed=float(value.get("speed", 1.0)),
             enabled=bool(value.get("enabled", True)),
+            system_voice=str(value.get("system_voice", "")),
+            system_pitch=int(value.get("system_pitch", 0)),
         )
 
     def resolve_reference(self, base_dir: Path) -> Path:

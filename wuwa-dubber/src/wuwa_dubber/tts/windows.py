@@ -18,7 +18,7 @@ from .client import SynthesisError
 
 
 # Text and file paths are JSON data on stdin, never interpolated into code.
-# SAPI COM works with the desktop voices already installed on Windows.
+# Existing desktop and OneCore voice tokens are opened read-only.
 _SCRIPT = r'''
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -30,28 +30,44 @@ try {
     $payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
     $voice = New-Object -ComObject SAPI.SpVoice
     $tokens = $voice.GetVoices()
+    $allTokens = @()
+    for ($i = 0; $i -lt $tokens.Count; $i++) { $allTokens += $tokens.Item($i) }
+    $oneCore = 'HKLM:\SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens'
+    if (Test-Path -LiteralPath $oneCore) {
+        foreach ($key in Get-ChildItem -LiteralPath $oneCore) {
+            try {
+                $token = New-Object -ComObject SAPI.SpObjectToken
+                $token.SetId($key.Name, '', $false)
+                $allTokens += $token
+            } catch { }
+        }
+    }
     $chosen = $null
+    $requested = $null
     $available = @()
-    for ($i = 0; $i -lt $tokens.Count; $i++) {
-        $token = $tokens.Item($i)
+    foreach ($token in $allTokens) {
         $language = $token.GetAttribute('Language')
         $isChinese = $false
         foreach ($code in ($language -split ';')) {
             if (([Convert]::ToInt32($code, 16) -band 1023) -eq 4) { $isChinese = $true }
         }
         if ($isChinese) {
-            $available += @{name=$token.GetDescription(); id=$token.Id; language=$language}
-            if ($null -eq $chosen -or $language -eq '804') { $chosen = $token }
+            $available += @{name=$token.GetDescription(); id=$token.Id; language=$language;
+                gender=$token.GetAttribute('Gender'); age=$token.GetAttribute('Age')}
+            if ($null -eq $chosen -or ($language -eq '804' -and $chosen.GetAttribute('Language') -ne '804')) {
+                $chosen = $token
+            }
         }
         if ($payload.voice_id -and $token.Id -eq $payload.voice_id -and $isChinese) {
             $requested = $token
         }
     }
+    if ($null -eq $chosen) { throw 'No Chinese speech voice is installed in Windows.' }
+    $defaultVoice = $chosen
     if ($payload.voice_id) {
         if ($null -eq $requested) { throw 'The selected Chinese Windows voice is no longer available.' }
         $chosen = $requested
     }
-    if ($null -eq $chosen) { throw 'No Chinese desktop speech voice is installed in Windows.' }
     $voice.Voice = $chosen
     if ($payload.action -eq 'synthesize') {
         $voice.Rate = [int]$payload.rate
@@ -60,13 +76,20 @@ try {
         $stream.Format.Type = 22
         $stream.Open([string]$payload.output, 3, $false)
         $voice.AudioOutputStream = $stream
-        # SVSFIsNotXML: text containing <...> is spoken as text, not interpreted.
-        [void]$voice.Speak([string]$payload.text, 16)
+        if ([int]$payload.pitch -eq 0) {
+            # SVSFIsNotXML: dialogue markup is literal text.
+            [void]$voice.Speak([string]$payload.text, 16)
+        } else {
+            $escaped = [System.Security.SecurityElement]::Escape([string]$payload.text)
+            $xml = '<pitch absmiddle="' + [int]$payload.pitch + '">' + $escaped + '</pitch>'
+            [void]$voice.Speak($xml, 8)
+        }
         $stream.Close()
         $stream = $null
     }
     @{status='ok'; backend='windows-sapi'; voice=$chosen.GetDescription(); voice_id=$chosen.Id;
       language=$chosen.GetAttribute('Language'); voices=$available; sample_rate=22050;
+      default_voice_id=$defaultVoice.Id; default_voice=$defaultVoice.GetDescription();
       note='Windows Chinese speech; not character voice cloning'} | ConvertTo-Json -Depth 5 -Compress
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
@@ -127,8 +150,8 @@ class WindowsTtsClient:
 
     def cache_identity(self) -> dict[str, Any]:
         health = self._health or self.health()
-        return {"backend": "windows-sapi", "voice": health["voice_id"],
-                "version": 1, "format": "pcm16-mono-22050"}
+        return {"backend": "windows-sapi", "voice": health.get("default_voice_id", health["voice_id"]),
+                "version": 2, "format": "pcm16-mono-22050"}
 
     def cancel(self) -> None:
         with self._process_lock:
@@ -144,6 +167,8 @@ class WindowsTtsClient:
             raise SynthesisError("朗读文字不能为空")
         if not math.isfinite(profile.speed) or not 0.5 <= profile.speed <= 2.0:
             raise SynthesisError("语速必须位于 0.5 到 2.0 之间")
+        if type(profile.system_pitch) is not int or not -10 <= profile.system_pitch <= 10:
+            raise SynthesisError("系统音调必须是 -10 到 10 之间的整数")
         output = output.resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
         temporary = output.with_name(f".{output.stem}-{uuid4().hex}.tmp.wav")
@@ -151,13 +176,16 @@ class WindowsTtsClient:
             result = self._invoke({
                 "action": "synthesize", "text": utterance.text, "output": str(temporary),
                 "rate": max(-10, min(10, round(10 * math.log2(profile.speed)))),
-                "voice_id": (self._health or {}).get("voice_id", ""),
+                "voice_id": profile.system_voice,
+                "pitch": profile.system_pitch,
             })
             with wave.open(str(temporary), "rb") as handle:
                 if handle.getsampwidth() != 2 or handle.getnframes() <= 0 or handle.getcomptype() != "NONE":
                     raise SynthesisError("Windows 系统朗读未生成有效 PCM16 音频")
             temporary.replace(output)
-            self._health = result
+            # A character preset must never replace the default for the next line.
+            if self._health is None:
+                self._health = result
         except (wave.Error, EOFError, OSError) as exc:
             raise SynthesisError(f"无法保存朗读音频：{exc}") from exc
         finally:

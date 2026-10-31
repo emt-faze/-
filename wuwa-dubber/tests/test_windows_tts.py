@@ -94,3 +94,37 @@ def test_windows_rejects_empty_text_and_invalid_speed(tmp_path: Path) -> None:
             else:
                 raise AssertionError("invalid synthesis request accepted")
         invoke.assert_not_called()
+
+
+def test_character_preset_does_not_change_default_voice(tmp_path: Path) -> None:
+    client = WindowsTtsClient()
+    client._health = {"voice_id": "default", "default_voice_id": "default"}
+    requests = []
+
+    def synthesize(payload):
+        requests.append(payload)
+        with wave.open(payload["output"], "wb") as handle:
+            handle.setparams((1, 2, 22050, 0, "NONE", "not compressed"))
+            handle.writeframes(b"\1\0" * 220)
+        return {"status": "ok", "voice_id": payload["voice_id"] or "default",
+                "default_voice_id": "default"}
+
+    with patch.object(client, "_invoke", side_effect=synthesize):
+        client.synthesize(Utterance("男声"), VoiceProfile("男声", system_voice="male", system_pitch=-3), tmp_path / "male.wav")
+        client.synthesize(Utterance("旁白"), VoiceProfile("旁白"), tmp_path / "default.wav")
+    assert requests[0]["voice_id"] == "male" and requests[0]["pitch"] == -3
+    assert requests[1]["voice_id"] == "" and requests[1]["pitch"] == 0
+    assert client.cache_identity()["voice"] == "default"
+
+
+def test_invalid_pitch_never_launches_synthesis(tmp_path: Path) -> None:
+    client = WindowsTtsClient()
+    with patch.object(client, "_invoke") as invoke:
+        for pitch in (11, -11, 1.5, True):
+            try:
+                client.synthesize(Utterance("你好"), VoiceProfile("旁白", system_pitch=pitch), tmp_path / "test.wav")
+            except SynthesisError:
+                pass
+            else:
+                raise AssertionError("invalid pitch accepted")
+        invoke.assert_not_called()

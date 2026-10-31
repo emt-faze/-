@@ -214,3 +214,4 @@ def test_corrupt_wav_is_not_reused(tmp_path: Path) -> None:
     target = tmp_path / "broken.wav"
     target.write_bytes(b"RIFF")
     assert not DubPipeline._valid_wav(target)
+

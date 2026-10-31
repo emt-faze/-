@@ -56,7 +56,7 @@ class PunctuationTests(unittest.TestCase):
         import cv2
         source = Path(__file__).parent/'records/2026-10-29/b2943853ae9c/images/b2943853ae9c-000001_body.png'
         if not source.exists():
-            self.skipTest('Private real-game evidence is not included in the public package')
+            self.skipTest('Private saved-game evidence is not included in the public package')
         image = cv2.imdecode(np.fromfile(source, np.uint8), cv2.IMREAD_COLOR)
         box = [[950, 7], [1100, 7], [1100, 44], [950, 44]]
         for scale in (1, 2):
@@ -94,7 +94,7 @@ class PunctuationTests(unittest.TestCase):
         import cv2
         root = Path(__file__).parent/'records/2026-10-29/1f9996037ca3'
         if not root.exists():
-            self.skipTest('Private real-game evidence is not included in the public package')
+            self.skipTest('Private saved-game evidence is not included in the public package')
         for path in sorted(root.glob('1f9996037ca3-*.json')):
             record=json.loads(path.read_text(encoding='utf-8'))
             image=cv2.imdecode(np.fromfile(root/record['body_image'],np.uint8),cv2.IMREAD_COLOR)
@@ -232,3 +232,5 @@ class RevisionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+

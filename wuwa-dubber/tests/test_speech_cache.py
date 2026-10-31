@@ -4,6 +4,7 @@ import hashlib
 import json
 import threading
 import wave
+from unittest.mock import patch
 from dataclasses import replace
 from pathlib import Path
 
@@ -79,6 +80,23 @@ def test_cache_identity_is_obtained_once_per_instance(tmp_path: Path) -> None:
     assert client.identity_calls == 2
 
 
+def test_boundary_fix_does_not_reuse_old_audio(tmp_path: Path) -> None:
+    config, profile, client, cache = cache_setup(tmp_path)
+    utterance = Utterance("失误了啊，鉴定师。", "角色")
+    old = cache.get_or_create(utterance, profile, cancel_event=threading.Event())
+    with patch.object(client, "cache_identity", return_value={
+        "backend": "test", "model_revision": "one",
+        "inference": {"seed": 42, "implementation_version": 4,
+                      "audio_tokenizer_dtype": "float32", "repetition_penalty": 1.0},
+    }):
+        revised = SpeechCache(config, cache.cache_dir, client)
+        new = revised.get_or_create(utterance, profile, cancel_event=threading.Event())
+        repeated = revised.get_or_create(utterance, profile, cancel_event=threading.Event())
+    assert old.path != new.path and old.path.is_file()
+    assert not new.cache_hit and repeated.cache_hit
+    assert len(client.calls) == 2
+
+
 def test_cache_tracks_reference_contents_and_voice_settings(tmp_path: Path) -> None:
     config, profile, _, cache = cache_setup(tmp_path)
     utterance = Utterance("测试")
@@ -100,6 +118,19 @@ def test_identical_reference_at_new_path_reuses_cache(tmp_path: Path) -> None:
     second = tmp_path / "moved.wav"
     second.write_bytes(Path(profile.reference_audio).read_bytes())
     assert cache.path_for(utterance, replace(profile, reference_audio=str(second))) == original
+
+
+def test_system_voice_pitch_and_speed_never_reuse_wrong_audio(tmp_path: Path) -> None:
+    cache = SpeechCache(AppConfig(tts_backend="windows-sapi"), tmp_path / "cache", CacheClient())
+    profile = VoiceProfile("系统声音", system_voice="male", system_pitch=1)
+    utterance = Utterance("相同的一句台词")
+    variants = [profile, replace(profile, system_voice="female"), replace(profile, system_pitch=-3),
+                replace(profile, speed=.9)]
+    results = [cache.get_or_create(utterance, item, cancel_event=threading.Event()) for item in variants]
+    assert len({item.path for item in results}) == 4
+    assert not any(item.cache_hit for item in results)
+    again = cache.get_or_create(utterance, profile, cancel_event=threading.Event())
+    assert again.cache_hit and again.path == results[0].path
 
 
 def test_force_failure_preserves_old_valid_audio(tmp_path: Path) -> None:

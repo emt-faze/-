@@ -1,8 +1,10 @@
-param([switch]$SkipModels)
+﻿param([switch]$SkipModels, [string]$PythonPath = "")
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $ocrRoot = $PSScriptRoot
 $ocrPython = Join-Path $ocrRoot '.venv\Scripts\python.exe'
+$env:PYTHONUTF8 = '1'
+$env:PYTHONNOUSERSITE = '1'
 
 function Assert-Python312([string]$File, [string[]]$Prefix) {
     & $File @Prefix -c 'import sys; assert sys.version_info[:2]==(3,12) and sys.maxsize>2**32'
@@ -11,7 +13,10 @@ function Assert-Python312([string]$File, [string[]]$Prefix) {
 
 if (-not (Test-Path -LiteralPath $ocrPython)) {
     $ocrLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
-    if ($ocrLauncher) {
+    if ($PythonPath) {
+        $ocrBasePython = $PythonPath
+        $ocrPrefix = @()
+    } elseif ($ocrLauncher) {
         $ocrBasePython = $ocrLauncher.Source
         $ocrPrefix = @('-3.12')
     } else {
@@ -38,4 +43,4 @@ if (-not $SkipModels) {
     & $ocrPython -X utf8 (Join-Path $ocrRoot 'scripts\download_models.py')
     if ($LASTEXITCODE -ne 0) { throw 'Model preparation failed. Run setup.cmd again to retry.' }
 }
-Write-Host 'Ready. Open start-ocr.cmd. Calibrate your own dialogue and speaker regions before capture.'
+Write-Host 'OCR is ready. Open start-ocr.cmd, or use the root dialogue-generator launcher after its installer finishes.'

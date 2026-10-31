@@ -37,3 +37,14 @@ outputs/
 *.pt
 .DS_Store
 Thumbs.db
+
+# Generator session data
+**/records/
+**/generation-projects/
+**/runtime-logs/
+**/generator-state.json
+**/runtime.json
+**/config.json
+*.lock
+*.log
+nte-dialogue-ocr/assets/ocr-v6/*.onnx

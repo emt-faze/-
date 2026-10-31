@@ -56,8 +56,14 @@ if (-not $EnvironmentWorks) {
 # Reusing an already working installation does not download anything.
 $DependencyCheck = "import PySide6, cv2, rapidocr_onnxruntime, windows_capture, sounddevice, numpy, pynput, win32com.client"
 if ($CoreOnly) { $DependencyCheck = "import json, pathlib" }
+# Windows PowerShell 5.1 turns native stderr into a terminating error under
+# ErrorActionPreference=Stop, before the missing-dependency installer can run.
+$PreviousErrorPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 & $EnvironmentPython -c $DependencyCheck 2>$null
-if ($LASTEXITCODE -ne 0) {
+$DependencyResult = $LASTEXITCODE
+$ErrorActionPreference = $PreviousErrorPreference
+if ($DependencyResult -ne 0) {
     & $EnvironmentPython -m pip --version *> $null
     if ($LASTEXITCODE -ne 0) {
         & $EnvironmentPython -m ensurepip --upgrade
@@ -66,7 +72,10 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "Installing missing application dependencies (internet access may be required)..."
     $InstallTarget = ".[all]"
     if ($CoreOnly) { $InstallTarget = "." }
-    & $EnvironmentPython -m pip install $InstallTarget
+    $InstallArguments = @('-m', 'pip', 'install', $InstallTarget)
+    $Constraints = Join-Path $ProjectRoot 'constraints.txt'
+    if (Test-Path -LiteralPath $Constraints) { $InstallArguments += @('-c', $Constraints) }
+    & $EnvironmentPython @InstallArguments
     if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
     & $EnvironmentPython -c $DependencyCheck
     if ($LASTEXITCODE -ne 0) { throw "The dependency check failed after installation." }

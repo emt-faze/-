@@ -102,7 +102,7 @@ class CaptureReconnectTests(unittest.TestCase):
         self.stack.enter_context(patch.object(launch, "running_process_names", return_value={"htgame.exe"}))
         self.stack.enter_context(patch.object(launch, "_wait_window", return_value=self.window))
         self.identity = self.stack.enter_context(patch.object(launch, "_assert_window_identity"))
-        self.stack.enter_context(patch.object(launch, "activate_game"))
+        self.activate = self.stack.enter_context(patch.object(launch, "activate_game"))
         self.capture_factory = self.stack.enter_context(patch.object(launch, "GameCapture"))
         self.click = self.stack.enter_context(patch.object(launch, "click_enter_game", return_value=True))
         self.classify = self.stack.enter_context(patch("game_scene.classify_frame"))
@@ -190,6 +190,43 @@ class CaptureReconnectTests(unittest.TestCase):
             launch.ensure_game({"capture_backend": "printwindow"}, stop=self.stop)
         self.capture_factory.assert_called_once_with(self.window, backend="printwindow")
         first.stop.assert_called_once_with()
+
+    def test_wgc_observes_existing_world_without_requesting_foreground(self):
+        capture = self.capture([1, 2])
+        self.capture_factory.return_value = capture
+        self.classify.return_value = {"state": "in_game", "evidence": ["verified HUD"]}
+        result = launch.ensure_game({"capture_backend": "wgc"}, stop=self.stop)
+        self.assertTrue(result["report"]["in_game_verified"])
+        self.activate.assert_not_called()
+        self.click.assert_not_called()
+        self.capture_factory.assert_called_once_with(self.window, backend="wgc", require_foreground=False, first_frame_timeout=10)
+
+    def test_wgc_initial_frame_timeout_reconnects_then_confirms_world(self):
+        first = self.capture([launch.CaptureTimeout('WGC first frame timed out')])
+        replacement = self.capture([1, 2])
+        self.capture_factory.side_effect = [first, replacement]
+        self.classify.return_value = {"state": "in_game", "evidence": ["verified HUD"]}
+        result = launch.ensure_game({"capture_backend": "wgc"}, stop=self.stop)
+        self.assertTrue(result['report']['success'])
+        self.assertEqual(len(result['report']['capture_reconnects']), 1)
+        self.capture_factory.assert_has_calls([
+            call(self.window, backend='wgc', require_foreground=False, first_frame_timeout=10),
+            call(self.window, backend='wgc', require_foreground=False, first_frame_timeout=10),
+        ])
+        first.stop.assert_called_once_with()
+        replacement.stop.assert_called_once_with()
+        self.click.assert_not_called()
+
+    def test_foreground_denial_waits_for_fresh_title_instead_of_aborting(self):
+        self.capture_factory.return_value = self.capture([1, 2, 3, 4])
+        title = {"state": "title", "enter_button": {"center": [160, 165]}, "evidence": []}
+        world = {"state": "in_game", "evidence": ["verified HUD"]}
+        self.classify.side_effect = [title, title, world, world]
+        self.click.side_effect = [launch.GameFocusRequired('foreground unavailable'), True]
+        result = launch.ensure_game({"capture_backend": "wgc"}, stop=self.stop)
+        self.assertTrue(result["report"]["success"])
+        self.assertEqual(len(result["report"]["entry_clicks"]), 1)
+        self.assertIn('waiting_foreground', result['report']['milestones_seconds'])
 
 
 class LauncherTests(unittest.TestCase):

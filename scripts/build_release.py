@@ -13,7 +13,7 @@ FIXED_FILES = (
     ".gitignore", ".gitattributes", "README.md", "THIRD_PARTY_NOTICES.md",
     "docs/latency-benchmarks.json",
     "安装基础环境.bat", "安装角色配音模型.bat", "启动AI配音.bat", "打开设置.bat", "停止本地模型.bat",
-    "wuwa-dubber/README.md", "wuwa-dubber/使用说明.txt", "wuwa-dubber/pyproject.toml",
+    "wuwa-dubber/README.md", "wuwa-dubber/使用说明.txt", "wuwa-dubber/pyproject.toml", "wuwa-dubber/constraints.txt",
     "wuwa-dubber/start-ai-dubbing.bat", "wuwa-dubber/start-wuwa-dubber.bat",
     "local-voice-model/README.md", "local-voice-model/qwen_server.py",
     "local-voice-model/download_models.py", "local-voice-model/requirements.txt",

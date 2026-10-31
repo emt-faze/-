@@ -489,10 +489,13 @@ class GameCapture:
             raise RuntimeError(self._geometry_error)
         if self._backend_name == "wgc":
             failure = self._wgc_failure
-            if not failure and not self._ever_received and now - self._backend_started > self.first_frame_timeout:
+            timed_out = not failure and not self._ever_received and now - self._backend_started > self.first_frame_timeout
+            if timed_out:
                 failure = "WGC 在等待时限内没有返回有效画面"
             if failure:
                 if self.backend != "auto":
+                    if timed_out:
+                        raise CaptureTimeout(failure)
                     raise RuntimeError(failure)
                 self.fallback_reason = failure
                 self._start_printwindow()

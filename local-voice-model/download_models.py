@@ -22,13 +22,12 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parent
 REPO = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
-REVISION = "5d83992436eae1d760afd27aff78a71d676296fc"
 MODEL = ROOT / "models" / "Qwen3-TTS-12Hz-0.6B-Base"
 LOGS = ROOT / "logs"
 MANIFEST = MODEL / "download-manifest.json"
 METADATA = LOGS / "model-source-metadata.json"
 LOCK = threading.Lock()
-USER_AGENT = "local-game-dubbing/0.4.0"
+USER_AGENT = "Codex-local-voice-deployment/1.0"
 
 
 def now() -> str:
@@ -150,11 +149,11 @@ def main() -> int:
     elif METADATA.is_file():
         metadata = json.loads(METADATA.read_text(encoding="utf-8-sig"))
     else:
-        revision_path = f"/revision/{old_manifest['revision'] if old_manifest else REVISION}"
+        revision_path = f"/revision/{old_manifest['revision']}" if old_manifest else ""
         metadata = fetch_json(f"https://huggingface.co/api/models/{REPO}{revision_path}?blobs=true")
         save_json(METADATA, metadata)
     revision = metadata.get("sha")
-    if metadata.get("id") != REPO or revision != REVISION:
+    if metadata.get("id") != REPO or not isinstance(revision, str) or len(revision) != 40:
         raise ValueError("Metadata must identify the expected public model and an exact 40-character commit")
     if old_manifest and old_manifest.get("revision") != revision:
         raise ValueError("Existing deployment uses a different pinned revision; refusing to mix files")

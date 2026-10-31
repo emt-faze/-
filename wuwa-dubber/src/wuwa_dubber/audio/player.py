@@ -15,9 +15,10 @@ class AudioDevice:
 
 
 class AudioPlayer:
-    def __init__(self, device: int | None = None, *, volume: float = 1.0) -> None:
+    def __init__(self, device: int | None = None, *, volume: float = 1.0, latency=None) -> None:
         self.device = device
         self.volume = min(1.5, max(0.0, volume))
+        self.latency = latency
         self._stop = threading.Event()
         self._play_lock = threading.RLock()
 
@@ -45,7 +46,7 @@ class AudioPlayer:
     def set_volume(self, volume: float) -> None:
         self.volume = min(1.5, max(0.0, volume))
 
-    def play(self, path: Path, *, cancel_event: threading.Event | None = None) -> None:
+    def play(self, path: Path, *, cancel_event: threading.Event | None = None, on_started=None) -> None:
         cancelled = cancel_event or threading.Event()
         with self._play_lock:
             if cancelled.is_set():
@@ -64,6 +65,8 @@ class AudioPlayer:
                 if cancelled.is_set() or self._stop.is_set():
                     return
                 winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+            if on_started:
+                on_started()
             import time
 
             deadline = time.monotonic() + duration
@@ -90,21 +93,32 @@ class AudioPlayer:
         with self._play_lock:
             if cancelled.is_set() or self._stop.is_set():
                 return
-            sd.play(audio, sample_rate, device=self.device, blocking=False)
+            options = {} if self.latency is None else dict(latency=self.latency)
+            sd.play(audio, sample_rate, device=self.device, blocking=False, **options)
+        if on_started:
+            on_started()
         while not self._stop.wait(0.05):
             if cancelled.is_set():
                 break
             stream = sd.get_stream()
             if stream is None or not stream.active:
                 break
-        sd.stop()
+        if cancelled.is_set() or self._stop.is_set():
+            self.stop()
+        else:
+            sd.stop()
 
     def stop(self) -> None:
         with self._play_lock:
             self._stop.set()
             try:
                 import sounddevice as sd
-
+                try:
+                    stream = sd.get_stream()
+                except RuntimeError:
+                    stream = None
+                if stream is not None and stream.active:
+                    stream.abort()
                 sd.stop()
             except ImportError:
                 try:

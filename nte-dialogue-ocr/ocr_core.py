@@ -146,6 +146,71 @@ def leading_ellipsis(image, polygon):
     return "", []
 
 
+def standalone_ellipsis(image):
+    """Find one isolated, centered run of 3/6 outlined white dots in a body ROI.
+
+    Work from original pixels, independent of the OCR detector and its scale.
+    Geometry is evidence, not a model confidence score or a second model vote.
+    """
+    import cv2
+    height, width = image.shape[:2]
+    if width < 100 or height < 8:
+        return "", []
+    lower = image.min(axis=2)
+    white = ((lower > 200) & (image.max(axis=2).astype(int)-lower < 40)).astype(np.uint8)
+    _, _, stats, centers = cv2.connectedComponentsWithStats(white, 8)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    dots = []
+    for (x, y, w, h, area), (cx, cy) in zip(stats[1:], centers[1:]):
+        if not (1 <= w <= width*.006 and 1 <= h <= width*.006
+                and 1/3 <= w/h <= 3 and area >= .5*w*h):
+            continue
+        pad = max(1, round(width*.0012))
+        if x < pad or y < pad or x+w+pad > width or y+h+pad > height:
+            continue
+        ring = gray[y-pad:y+h+pad, x-pad:x+w+pad]
+        if (ring < 140).mean() < .25:
+            continue
+        dots.append((float(cx), float(cy), [int(x), int(y), int(x+w), int(y+h)]))
+    candidates = {}
+    for _, baseline, _ in dots:
+        aligned = sorted(d for d in dots if abs(d[1]-baseline) <= max(1, width*.001))
+        groups = []
+        for dot in aligned:
+            if not groups or dot[0]-groups[-1][-1][0] > width*.012:
+                groups.append([dot])
+            else:
+                groups[-1].append(dot)
+        for group in groups:
+            if len(group) not in (3, 6):
+                continue
+            xs = np.array([d[0] for d in group]); ys = np.array([d[1] for d in group])
+            gaps = np.diff(xs)
+            boxes = [d[2] for d in group]
+            sizes = np.array([[b[2]-b[0], b[3]-b[1]] for b in boxes])
+            if not (abs((xs[0]+xs[-1])/2-width/2) <= width*.08
+                    and width*.0025 <= gaps.mean() <= width*.012
+                    and gaps.std()/gaps.mean() <= .18
+                    and np.ptp(ys) <= max(1, gaps.mean()*.15)
+                    and np.all(sizes.max(axis=0) <= 2*sizes.min(axis=0)+1)
+                    and sizes[:, 0].max() < gaps.min()*.65):
+                continue
+            # A detached punctuation run beside missed words must not replace
+            # those words. Reject other white ink across the same text band.
+            y0 = max(0, int(ys.min()-2*gaps.mean()))
+            y1 = min(height, int(np.ceil(ys.max()+2*gaps.mean()))+1)
+            band = white[y0:y1].copy()
+            for x, y, right, bottom in boxes:
+                band[max(0,y-y0):bottom-y0, x:right] = 0
+            if int(band.sum()) > 2:
+                continue
+            candidates[tuple(tuple(b) for b in boxes)] = boxes
+    if len(candidates) != 1:
+        return "", []
+    boxes = next(iter(candidates.values()))
+    return "…"*(len(boxes)//3), boxes
+
+
 def internal_ellipsis(image, polygon, text):
     """Correct an existing dot token only when its own image has 3/6 dots."""
     import cv2
@@ -205,7 +270,12 @@ def internal_ellipsis(image, polygon, text):
 def _text_key(text: str) -> str:
     # Preserve punctuation, digits, case and Chinese characters. A single-letter
     # or negation change is a different dialogue, regardless of similarity.
-    return " ".join(unicodedata.normalize("NFC", text).split())
+    value = " ".join(unicodedata.normalize("NFC", text).split())
+    # CJK layout and detector fragments can insert spaces beside an ellipsis,
+    # quote or wrapped character. These are not changes to the spoken text.
+    # Keep spaces between Latin words so distinct word boundaries stay distinct.
+    cjk = r"\u3400-\u9fff\uf900-\ufaff，。！？；：、…「」『』“”‘’（）【】《》〈〉"
+    return re.sub(fr"(?<=[{cjk}]) | (?=[{cjk}])", "", value)
 
 
 def trailing_punctuation(image, polygon, text):
@@ -460,7 +530,8 @@ class DialogueOCR:
             raise ValueError("Captured crop does not contain the calibrated text region")
         return frame[top-oy:bottom-oy, left-ox:right-ox].copy(), (left, top)
 
-    def _recognize_image(self, image, offset=(0, 0), scale=1.0, recover_punctuation=False, centered=False, engine=None):
+    def _recognize_image(self, image, offset=(0, 0), scale=1.0, recover_punctuation=False, centered=False, engine=None,
+                         speaker_style=False):
         import cv2
         scaled = image if scale == 1 else cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         result, _ = (engine if engine is not None else self.engine)(scaled, use_cls=False)
@@ -477,17 +548,62 @@ class DialogueOCR:
                 raise ValueError("OCR returned an invalid text polygon")
             if not math.isfinite(confidence) or not 0 <= confidence <= 1:
                 raise ValueError("OCR returned an invalid confidence")
-            if centered:
-                slope=abs(points[1,1]-points[0,1])/max(1,abs(points[1,0]-points[0,0]))
+            if centered or speaker_style:
+                tilt=abs(points[1,1]-points[0,1])
+                horizontal=max(1,abs(points[1,0]-points[0,0]))
                 x0,y0=np.maximum(0,points.min(axis=0).astype(int))
                 x1,y1=np.minimum([scaled.shape[1],scaled.shape[0]],np.ceil(points.max(axis=0)).astype(int))
                 patch=scaled[y0:y1,x0:x1]
-                white_ratio=float((patch.min(axis=2)>205).mean()) if patch.size else 0
-                if slope>.12 or not .025<=white_ratio<=.65:
+                # Tiny two-character boxes can have a slanted detector envelope
+                # even though the subtitle glyphs are horizontal (e.g. "已。").
+                if not patch.size or tilt>max(.12*horizontal,.25*(y1-y0)):
                     continue
+                if speaker_style:
+                    blue,green,red=patch.astype(np.int16).transpose(2,0,1)
+                    warm=(red>190)&(green>100)&(red-green>15)&(green-blue>15)
+                    # A background sign's loose box can overlap the top of the
+                    # name below it. Require name-colored ink in its own middle,
+                    # not just a few orange pixels borrowed at the box edge.
+                    middle=warm[len(warm)//4:max(len(warm)//4+1,3*len(warm)//4)]
+                    if (warm.mean()<.025 or middle.mean()<.025 or x1-x0<.65*(y1-y0)
+                            or abs((x0+x1)/2-scaled.shape[1]/2)>scaled.shape[1]*.18):
+                        continue
+                else:
+                    white_ratio=float((patch.min(axis=2)>205).mean())
+                    if not .025<=white_ratio<=.65:
+                        continue
             model_text = text
             evidence = []
             model_points = points / scale + np.asarray(offset, dtype=float)
+            name_check = None
+            if speaker_style:
+                # A loose name box may include dark background lettering. Read
+                # the complete name-colored span when it is substantially
+                # narrower than that box; never infer a name from the library.
+                active_engine = engine if engine is not None else self.engine
+                reader = getattr(active_engine, 'recognize_line', None)
+                if reader is not None:
+                    ys,xs = np.nonzero(warm)
+                    pad = max(2, round((int(ys.max()-ys.min())+1)*.1))
+                    left=max(0,int(xs.min())-pad); right=min(patch.shape[1],int(xs.max())+pad+1)
+                    top=max(0,int(ys.min())-pad); bottom=min(patch.shape[0],int(ys.max())+pad+1)
+                    if right-left < .85*patch.shape[1]:
+                        name_check = dict(accepted=False, crop_box=[
+                            (x0+left)/scale+offset[0], (y0+top)/scale+offset[1],
+                            (x0+right)/scale+offset[0], (y0+bottom)/scale+offset[1]])
+                        try:
+                            name, name_score = reader(patch[top:bottom,left:right].copy())
+                            name_check.update(text=name,confidence=name_score)
+                            original, expanded = _text_key(text), _text_key(name)
+                            if (math.isfinite(name_score) and self.min_confidence<=name_score<=1
+                                    and len(expanded)>len(original) and original in expanded):
+                                text=name
+                                confidence=min(confidence,name_score)
+                                points=np.array([[x0+left,y0+top],[x0+right,y0+top],
+                                                 [x0+right,y0+bottom],[x0+left,y0+bottom]],dtype=float)
+                                name_check['accepted']=True
+                        except Exception as exc:
+                            name_check['error']=str(exc)
             if recover_punctuation:
                 corrected,dots=internal_ellipsis(scaled,points,text)
                 if dots:
@@ -542,20 +658,31 @@ class DialogueOCR:
                             # If the line reader still omits the extra ink, retain
                             # the candidate and uncertainty instead of guessing a word.
                             existing_key, expanded_key = _text_key(text), _text_key(line_text)
+                            # The recognizer can read "一" even when the box
+                            # starts halfway along its stroke. Identical text is
+                            # evidence only for this overlapping, horizontal
+                            # first stroke; detached ink may still be a lost word.
+                            existing_edge = (expanded_key==existing_key and text.lstrip().startswith('一') and all(
+                                b[0]<points[:,0].min()<b[2]
+                                and b[2]-b[0]>=3*(b[3]-b[1])
+                                and b[2]<=points[:,0].min()+.7*np.ptp(points[:,1]) for b in uncovered))
                             if (math.isfinite(line_score) and self.min_confidence <= line_score <= 1
-                                    and len(expanded_key) > len(existing_key)
-                                    and existing_key in expanded_key):
+                                    and ((len(expanded_key)>len(existing_key) and existing_key in expanded_key)
+                                         or existing_edge)):
                                 text=line_text
                                 confidence=min(confidence,line_score)
                                 points=np.array([[x0,y0],[x1,y0],[x1,y1],[x0,y1]],dtype=float)
                                 coverage_warning=False
                                 line_check['accepted']=True
+                                if existing_edge:
+                                    line_check['reason']='detector_edge_overlaps_recognized_glyph'
                         except Exception as exc:
                             line_check['error']=str(exc)
             points = points / scale + np.asarray(offset, dtype=float)
             lines.append({"text": text, "confidence": confidence, "bbox": points.tolist(),
                           "model_text": model_text, "model_bbox": model_points.tolist(),
                           "punctuation_evidence": evidence,
+                          "speaker_recognition_check":name_check,
                           "coverage_warning":coverage_warning,"line_recognition_check":line_check,
                           "_cy": float(points[:, 1].mean()), "_x": float(points[:, 0].min()),
                           "_height": max(1., float(np.ptp(points[:, 1])))})
@@ -566,15 +693,45 @@ class DialogueOCR:
             rows={}
             for line in ordered:
                 rows.setdefault(line['row'],[]).append(line)
-            kept=[]; texts=[]
+            centered_rows=[]
             expected=offset[0]+image.shape[1]/2
             for row in rows.values():
                 left=min(p[0] for line in row for p in line['bbox'])
                 right=max(p[0] for line in row for p in line['bbox'])
                 if abs((left+right)/2-expected)<=image.shape[1]*.08:
-                    kept.extend(row)
-                    texts.append(_join_fragments([line['text'] for line in row]))
-            return kept,'\n'.join(texts)
+                    centered_rows.append(row)
+            words=[line for row in centered_rows for line in row if any(c.isalnum() for c in line['text'])]
+            text_bottom=max((p[1] for line in words for p in line['bbox']),default=math.inf)
+            text_height=float(np.median([np.ptp(np.asarray(line['bbox'])[:,1]) for line in words])) if words else 0.
+            kept=[]; texts=[]
+            for row in centered_rows:
+                text=_join_fragments([line['text'] for line in row])
+                points=np.asarray([p for line in row for p in line['bbox']])
+                top=float(points[:,1].min())
+                # The continue diamond at the bottom of the dialogue area can
+                # be read as one low-confidence dot. It is separated from the
+                # subtitle by a large blank band; inline punctuation, adjacent
+                # wrapped rows and real ellipses must retain their evidence.
+                if (text in {'.','·','•','。','◇','◆','◈'}
+                        and top>=offset[1]+image.shape[0]*.65
+                        and top-text_bottom>1.2*text_height
+                        and np.ptp(points[:,0])<=1.5*text_height):
+                    continue
+                kept.extend(row)
+                texts.append(text)
+            joined = '\n'.join(texts)
+            if recover_punctuation and (not joined or re.fullmatch(r'[\s.·…。]+', joined)):
+                punctuation, boxes = standalone_ellipsis(image)
+                if punctuation:
+                    absolute = [[b[0]+offset[0], b[1]+offset[1], b[2]+offset[0], b[3]+offset[1]] for b in boxes]
+                    left = min(b[0] for b in absolute); right = max(b[2] for b in absolute)
+                    top = min(b[1] for b in absolute); bottom = max(b[3] for b in absolute)
+                    return [dict(text=punctuation, confidence=0., confidence_source='pixel_geometry',
+                                 bbox=[[left,top],[right,top],[right,bottom],[left,bottom]], row=0,
+                                 model_text=' '.join(str(item[1]) for item in result or []), model_bbox=[],
+                                 punctuation_evidence=[dict(kind='standalone_outlined_ellipsis', dot_boxes=absolute)],
+                                 coverage_warning=False, line_recognition_check=None)], punctuation
+            return kept, joined
         return ordered, joined
 
     def _observe_speaker(self, text, confidence):
@@ -610,7 +767,8 @@ class DialogueOCR:
             speaker_image, speaker_offset = None, (0, 0)
             if self.speaker_roi is not None and body:
                 speaker_image, speaker_offset = self.region_image(frame_bgr, self.speaker_roi, client_size, origin)
-                speaker_lines, speaker = self._recognize_image(speaker_image, speaker_offset)
+                speaker_lines, speaker = self._recognize_image(speaker_image, speaker_offset,
+                                                               speaker_style=self.centered_body)
             else:
                 speaker_lines, speaker = [], ""
         except Exception:
@@ -687,7 +845,8 @@ class DialogueOCR:
                                                engine=self.review_engine)
         if source["speaker"] is not None:
             name_lines, name = self._recognize_image(source["speaker"], source["speaker_offset"],
-                                                   self.speaker_review_scale, engine=self.review_engine)
+                                                   self.speaker_review_scale, engine=self.review_engine,
+                                                   speaker_style=self.centered_body)
         else:
             name_lines, name = [], ""
         score = min((line["confidence"] for line in body_lines), default=0.)
@@ -716,3 +875,5 @@ class DialogueOCR:
         self._records[dialogue_id] = revised
         del self._pending[dialogue_id]
         return revised
+
+

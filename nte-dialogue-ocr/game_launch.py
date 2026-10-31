@@ -35,6 +35,10 @@ class LaunchCancelled(RuntimeError):
     pass
 
 
+class GameFocusRequired(RuntimeError):
+    """Windows has not granted foreground input to this verified game."""
+
+
 def is_admin():
     return bool(ctypes.windll.shell32.IsUserAnAdmin())
 
@@ -263,7 +267,7 @@ def activate_game(window, stop):
     _check_stop(stop)
     _assert_window_identity(window)
     if win32gui.GetForegroundWindow() != window.hwnd:
-        raise RuntimeError("Windows 未将游戏置于前台，尚未点击；请切回游戏后再试")
+        raise GameFocusRequired("Windows 未将游戏置于前台，尚未点击；请切回游戏后再试")
 
 
 def click_enter_game(window, button, frame_size, stop, captured_at=None):
@@ -496,8 +500,14 @@ def ensure_game(config, stop=None, progress=None, timeout=180, preview=None):
         _check_stop(stop)
         report["game"] = vars(game)
         update("游戏窗口已出现，正在观察启动与进入游戏过程…", "game_window")
-        activate_game(game, stop)
-        capture = GameCapture(game, backend=config.get("capture_backend", "mss")).start()
+        # WGC can observe the loading/title screen without stealing focus.
+        # Request foreground only when an actual, fresh entry button is found.
+        # A new Unreal window may exist before its first renderable surface.
+        # Keep this bounded wait separate from steady-state frame freshness.
+        background_capture = {"require_foreground": False, "first_frame_timeout": 10} if config.get("capture_backend") == "wgc" else {}
+        if not background_capture:
+            activate_game(game, stop)
+        capture = GameCapture(game, backend=config.get("capture_backend", "mss"), **background_capture).start()
         try:
             from game_scene import classify_frame
             end = time.monotonic() + config.get("entry_timeout_seconds", 120)
@@ -524,7 +534,7 @@ def ensure_game(config, stop=None, progress=None, timeout=180, preview=None):
                     update(f"加载期间截图暂时超时，正在重新连接画面（{reconnects}/3）…", "capture_reconnecting")
                     capture.stop()
                     _check_stop(stop)
-                    capture = GameCapture(game, backend=config.get("capture_backend", "mss")).start()
+                    capture = GameCapture(game, backend=config.get("capture_backend", "mss"), **background_capture).start()
                     sequence = 0
                     in_game_count = 0
                     in_game_since = None
@@ -558,7 +568,12 @@ def ensure_game(config, stop=None, progress=None, timeout=180, preview=None):
                             update("检测到“进入游戏”，准备点击中下方入口…", "title_screen")
                         if should_click and time.monotonic() - captured_at <= 3:
                             button = observation["enter_button"]
-                            if not click_enter_game(game, button, report["frame_size"], stop, captured_at=captured_at):
+                            try:
+                                if not click_enter_game(game, button, report["frame_size"], stop, captured_at=captured_at):
+                                    continue
+                            except GameFocusRequired:
+                                update("已找到进入游戏入口，等待游戏到前台后继续；可切换到《异环》窗口", "waiting_foreground")
+                                stop.wait(.5)
                                 continue
                             gate.clicked(time.monotonic())
                             report.setdefault("entry_clicks", []).append({"elapsed_seconds": round(time.monotonic()-began, 3),

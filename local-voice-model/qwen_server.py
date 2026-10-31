@@ -55,6 +55,16 @@ class PhaseTimer:
                 "total": round(elapsed, 3)}
 
 
+class IncompleteSpeech(RuntimeError):
+    """Generation hit its token allowance without reaching a natural end."""
+
+
+def speech_token_budget(text):
+    # 12.5 frames/s: allow about half a second per letter/character, with a
+    # five-second floor for expressive short lines. Never publish a cut result.
+    return min(1024, max(64, 24 + 6 * sum(char.isalnum() for char in text)))
+
+
 def _guard_generation(generate, torch, cancellation, *, timeout_seconds=150.0):
     """Reject partial tokens when a generation deadline stops the talker."""
     from transformers import StoppingCriteria, StoppingCriteriaList
@@ -78,6 +88,13 @@ def _guard_generation(generate, torch, cancellation, *, timeout_seconds=150.0):
         result = generate(*args, **kwargs)
         if interrupted.timed_out:
             raise RuntimeError(f"生成超过 {timeout_seconds:g} 秒，已丢弃未完成音频，请缩短台词后重试。")
+        sequences = getattr(result, "sequences", None)
+        eos = kwargs.get("eos_token_id")
+        if sequences is not None and eos is not None and not cancellation.is_set():
+            endings = sequences[:, -1].tolist()
+            allowed = set(eos if isinstance(eos, (list, tuple)) else [eos])
+            if not all(token in allowed for token in endings):
+                raise IncompleteSpeech("语音未完整结束，已丢弃未完成音频。")
         return result
 
     return guarded
@@ -106,8 +123,12 @@ class VoiceEngine:
             raise RuntimeError(f"模型未下载完整：{self.model_dir}")
         self.revision = self._revision()
         self.inference = {"dtype": "bfloat16" if device.startswith("cuda") else "float32",
+                          "audio_tokenizer_dtype": "float32",
                           "attention": "sdpa", "seed": 42, "max_new_tokens": 1024,
-                          "non_streaming_mode": True, "implementation_version": 3}
+                          "repetition_penalty": 1.0,
+                          "retry_repetition_penalty": 1.05, "completion_guard": 1,
+                          "token_budget": "min(1024,max(64,24+6*alnum))",
+                          "non_streaming_mode": True, "implementation_version": 4}
         load_timer = PhaseTimer()
         with load_timer.phase("model_load"):
             self.model = Qwen3TTSModel.from_pretrained(
@@ -115,6 +136,11 @@ class VoiceEngine:
                 dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32,
                 attn_implementation="sdpa", local_files_only=True,
             )
+            # The vendor tokenizer casts its padding mask to the codec dtype.
+            # BF16 rounds long masks before computing ceil(samples / 1920),
+            # dropping a reference frame (80 ms) for some perfectly valid clips.
+            # Keep the acoustic codec in FP32; the larger talker stays in BF16.
+            self.model.model.speech_tokenizer.model.float()
         # qwen-tts 0.1.1 drops arbitrary generation kwargs at its outer wrapper.
         # Attach cancellation to the inner Hugging Face talker, where criteria
         # are evaluated between generated tokens; leave vendor files untouched.
@@ -257,7 +283,8 @@ class VoiceEngine:
                 torch.cuda.reset_peak_memory_stats()
             torch.manual_seed(42)
             with timer.phase("ref_encode"):
-                key = hashlib.sha256(ref.read_bytes() + prompt.encode("utf-8")).hexdigest()
+                identity = json.dumps(self.inference, sort_keys=True).encode("utf-8")
+                key = hashlib.sha256(ref.read_bytes() + prompt.encode("utf-8") + identity).hexdigest()
                 prompt_cached = key in self.prompts
                 if not prompt_cached:
                     with torch.inference_mode():
@@ -271,10 +298,25 @@ class VoiceEngine:
             if cancellation.is_set():
                 raise RuntimeError("本句生成已取消")
             with timer.phase("infer"), torch.inference_mode():
-                wavs, sr = self.model.generate_voice_clone(
-                    text=text, language=language, voice_clone_prompt=self.prompts[key],
-                    non_streaming_mode=True, max_new_tokens=32 if is_warmup else 1024,
-                )
+                retried = False
+                for penalty in (1.0, 1.05):
+                    if cancellation.is_set():
+                        raise RuntimeError("本句生成已取消")
+                    try:
+                        wavs, sr = self.model.generate_voice_clone(
+                            text=text, language=language, voice_clone_prompt=self.prompts[key],
+                            non_streaming_mode=self.inference.get("non_streaming_mode", True),
+                            # Sustain normal syllables without a repetition penalty.
+                            # Only a non-terminating attempt uses the vendor penalty.
+                            repetition_penalty=penalty, max_new_tokens=speech_token_budget(text),
+                        )
+                        break
+                    except IncompleteSpeech:
+                        if penalty != 1.0 or cancellation.is_set():
+                            raise
+                        retried = True
+                        torch.manual_seed(42)
+                        LOGGER.warning("语音未自然结束，丢弃该次结果并使用防重复设置重试。")
             if cancellation.is_set():
                 raise RuntimeError("本句生成已取消")
             with timer.phase("wav_write"):
@@ -293,6 +335,7 @@ class VoiceEngine:
                        "timing_ms": timing,
                        "audio_seconds": round(len(wav) / sr, 3), "sample_rate": sr,
                        "prompt_cache_hit": prompt_cached,
+                       "completion_retry": retried,
                        "cpu_threads": torch.get_num_threads(),
                        "peak_allocated_mib": round(torch.cuda.max_memory_allocated() / 1024**2, 1) if self.device.startswith("cuda") else None,
                        "peak_reserved_mib": round(torch.cuda.max_memory_reserved() / 1024**2, 1) if self.device.startswith("cuda") else None}

@@ -1,10 +1,24 @@
 ﻿Set-StrictMode -Version Latest
 
 function Get-VoicePaths {
-    param([string]$ProjectRoot, [string]$AppConfig = "", [int]$Port = 9882)
+    param([string]$ProjectRoot, [string]$AppConfig = "", [int]$Port = 0)
     $ResolvedRoot = [IO.Path]::GetFullPath($ProjectRoot)
     if ([string]::IsNullOrWhiteSpace($AppConfig)) {
         $AppConfig = Join-Path (Split-Path -Parent $ResolvedRoot) 'wuwa-dubber\data\config.json'
+    }
+    if ($Port -eq 0) {
+        $Port = 9882
+        if (Test-Path -LiteralPath $AppConfig -PathType Leaf) {
+            $Settings = Get-Content -LiteralPath $AppConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($Settings.PSObject.Properties['tts_endpoint']) {
+                $ServiceUri = [Uri]([string]$Settings.tts_endpoint)
+                if ($ServiceUri.Scheme -ne 'http' -or $ServiceUri.Host -notin @('127.0.0.1', 'localhost') -or
+                    $ServiceUri.AbsolutePath -ne '/' -or $ServiceUri.UserInfo -or $ServiceUri.Query -or $ServiceUri.Fragment) {
+                    throw '本地模型启动地址必须为本机 HTTP 地址，且不能包含额外路径。'
+                }
+                $Port = $ServiceUri.Port
+            }
+        }
     }
     [pscustomobject]@{
         Root = $ResolvedRoot
